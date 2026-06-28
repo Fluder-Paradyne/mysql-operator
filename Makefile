@@ -80,3 +80,7 @@ test-e2e-s3: install
 test-e2e-clone: install
 	kubectl apply -f config/crd/mysql.asrk.dev_mysqlclones.yaml
 	go test ./test/e2e/ -tags=e2e -count=1 -timeout=25m -run 'TestMySQLCloneLive' -v
+
+# PITR e2e against MinIO (backup + binlog archive + restoreTo.time)
+test-e2e-pitr: install
+	go test ./test/e2e/ -tags=e2e -count=1 -timeout=30m -run 'TestMySQLPITRMinIO' -v

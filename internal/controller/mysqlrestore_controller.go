@@ -124,12 +124,10 @@ func (r *MySQLRestoreReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		rootSecret = mysql.Name + "-root"
 	}
 	rootKey := defaultSecretKey
+	// Apply container needs mysql + mysqlbinlog; official mysql server image lacks mysqlbinlog.
 	image := restore.Spec.Image
 	if image == "" {
-		image = mysql.Spec.Image
-	}
-	if image == "" {
-		image = defaultImage
+		image = defaultPITRToolsImage
 	}
 	awsImage := restore.Spec.AWSCLIImage
 	if awsImage == "" {
@@ -253,14 +251,28 @@ ls -la /work/binlogs || true
 	}
 
 	applyScript := fmt.Sprintf(`set -euo pipefail
+# Ensure mysql client + mysqlbinlog (debian tools image; server image lacks mysqlbinlog).
+if ! command -v mysql >/dev/null 2>&1 || ! command -v mysqlbinlog >/dev/null 2>&1; then
+  apt-get update -qq
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq default-mysql-client mariadb-client gzip ca-certificates >/dev/null
+  if ! command -v mysqlbinlog >/dev/null 2>&1 && command -v mariadb-binlog >/dev/null 2>&1; then
+    ln -sf "$(command -v mariadb-binlog)" /usr/local/bin/mysqlbinlog
+  fi
+fi
+export MYSQL_PWD="$MYSQL_ROOT_PASSWORD"
 HOST=%q
 echo "waiting for MySQL at $HOST..."
 for i in $(seq 1 60); do
-  mysqladmin ping -h"$HOST" -uroot -p"$MYSQL_ROOT_PASSWORD" --silent && break
+  mysqladmin ping -h"$HOST" -uroot --silent && break
   sleep 2
 done
 echo "WARNING: destructive restore - applying base backup (mysqldump typically includes DROP/CREATE)"
-gunzip -c /work/dump.sql.gz | mysql -h"$HOST" -uroot -p"$MYSQL_ROOT_PASSWORD"
+# Clear local GTID history so dump / replay can apply on an in-place restore target.
+mysql -h"$HOST" -uroot -e "RESET BINARY LOGS AND GTIDS" 2>/dev/null \
+  || mysql -h"$HOST" -uroot -e "RESET MASTER" 2>/dev/null \
+  || true
+gunzip -c /work/dump.sql.gz | sed -E '/^SET @@GLOBAL.GTID_PURGED/d;/^SET @@SESSION.SQL_LOG_BIN/d' \
+  | mysql -h"$HOST" -uroot
 echo "base backup applied"
 `, primaryHost)
 
@@ -274,21 +286,40 @@ echo "base backup applied"
 		if len(dt) > 19 {
 			dt = dt[:19]
 		}
+		// Replay archived binlogs up to stop-datetime. --force ignores duplicate-key noise from events
+		// already represented in the logical dump; stop-datetime excludes later markers (PITR proof).
 		applyScript += fmt.Sprintf(`
-if ls /work/binlogs/* >/dev/null 2>&1; then
+if ls /work/binlogs/mysql-bin.* >/dev/null 2>&1 || ls /work/binlogs/* >/dev/null 2>&1; then
   echo "replaying binlogs until %s"
-  shopt -s nullglob
-  FILES=(/work/binlogs/mysql-bin.* /work/binlogs/*)
-  if [ ${#FILES[@]} -gt 0 ]; then
-    mysqlbinlog --stop-datetime=%q "${FILES[@]}" | mysql -h"$HOST" -uroot -p"$MYSQL_ROOT_PASSWORD"
+  FILES=$(ls /work/binlogs/mysql-bin.* /work/binlogs/* 2>/dev/null | sort -u)
+  if [ -n "$FILES" ]; then
+    # GTID_MODE steps: ON -> ON_PERMISSIVE, then enforce can be OFF, then OFF_PERMISSIVE -> OFF.
+    mysql -h"$HOST" -uroot -e "SET GLOBAL gtid_mode=ON_PERMISSIVE"
+    mysql -h"$HOST" -uroot -e "SET GLOBAL enforce_gtid_consistency=OFF"
+    mysql -h"$HOST" -uroot -e "SET GLOBAL gtid_mode=OFF_PERMISSIVE"
+    mysql -h"$HOST" -uroot -e "SET GLOBAL gtid_mode=OFF"
+    mysql -h"$HOST" -uroot -N -e "SELECT @@GLOBAL.gtid_mode"
+    # shellcheck disable=SC2086
+    if mysqlbinlog --help 2>&1 | grep -q -- '--skip-gtids'; then
+      mysqlbinlog --skip-gtids --stop-datetime=%q $FILES | mysql --force -h"$HOST" -uroot
+    else
+      mysqlbinlog --stop-datetime=%q $FILES | mysql --force -h"$HOST" -uroot
+    fi
+    # Best-effort restore GTID for HA (step back up).
+    mysql -h"$HOST" -uroot -e "SET GLOBAL gtid_mode=OFF_PERMISSIVE" || true
+    mysql -h"$HOST" -uroot -e "SET GLOBAL gtid_mode=ON_PERMISSIVE" || true
+    mysql -h"$HOST" -uroot -e "SET GLOBAL gtid_mode=ON" || true
+    mysql -h"$HOST" -uroot -e "SET GLOBAL enforce_gtid_consistency=ON" || true
     echo "binlog replay finished"
   else
     echo "no binlog files found under /work/binlogs — PITR limited to base backup"
+    exit 1
   fi
 else
   echo "no binlogs downloaded — PITR limited to base backup"
+  exit 1
 fi
-`, dt, dt)
+`, dt, dt, dt)
 	}
 	applyScript += "\necho restore complete\n"
 
