@@ -1,0 +1,8 @@
+apiVersion: mysql.asrk.dev/v1alpha1
+kind: MySQLRestore
+metadata: {name: example}
+spec:
+  mysqlName: ha-mysql
+  backupName: ha-mysql-backup-1
+  restoreTo: {time: "2026-06-28T12:00:00Z"}
+

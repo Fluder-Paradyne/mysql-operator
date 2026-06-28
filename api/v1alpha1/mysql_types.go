@@ -56,6 +56,10 @@ type MySQLSpec struct {
 	// Only applies when replicas > 1.
 	// +optional
 	Failover *FailoverSpec `json:"failover,omitempty"`
+
+	// PITR enables binlog archiving for point-in-time recovery (used with MySQLBackup + MySQLRestore).
+	// +optional
+	PITR *PITRSpec `json:"pitr,omitempty"`
 }
 
 // FailoverSpec configures automatic failover behaviour.
@@ -151,6 +155,14 @@ type MySQLStatus struct {
 	// +optional
 	ReplicationSecretName string `json:"replicationSecretName,omitempty"`
 
+	// BinlogArchivePrefix is the S3 key prefix where binary logs are archived when PITR is enabled.
+	// +optional
+	BinlogArchivePrefix string `json:"binlogArchivePrefix,omitempty"`
+
+	// BinlogArchiveCronJob is the CronJob name that ships binlogs.
+	// +optional
+	BinlogArchiveCronJob string `json:"binlogArchiveCronJob,omitempty"`
+
 	// Conditions represent the latest available observations of the MySQL state.
 	// +optional
 	// +listType=map
@@ -216,6 +228,44 @@ func (s *MySQLSpec) FailoverUnhealthySeconds() int32 {
 		return *s.Failover.UnhealthySeconds
 	}
 	return 30
+}
+
+
+// PITRSpec configures point-in-time recovery prerequisites (binlog archiving to S3).
+type PITRSpec struct {
+	// Enabled turns binlog archiving on. Default false.
+	// +optional
+	Enabled *bool `json:"enabled,omitempty"`
+
+	// BinlogArchive is required when enabled; archives binary logs to S3 for PITR replay.
+	// +optional
+	BinlogArchive *BinlogArchiveSpec `json:"binlogArchive,omitempty"`
+}
+
+// BinlogArchiveSpec ships MySQL binary logs to S3 on a schedule.
+type BinlogArchiveSpec struct {
+	// Schedule is a Cron expression for the archive Job (default "*/5 * * * *" = every 5 minutes).
+	// +optional
+	Schedule string `json:"schedule,omitempty"`
+
+	// S3 destination for archived binlogs (same shape as backup S3).
+	S3 BackupS3Spec `json:"s3"`
+
+	// AWSCLIImage for the uploader container (default amazon/aws-cli:2.15.0).
+	// +optional
+	AWSCLIImage string `json:"awsCLIImage,omitempty"`
+
+	// Image for mysql client / mysqlbinlog (defaults to the MySQL CR image).
+	// +optional
+	Image string `json:"image,omitempty"`
+}
+
+// PITREnabled reports whether binlog archiving should run.
+func (s *MySQLSpec) PITREnabled() bool {
+	if s.PITR == nil || s.PITR.Enabled == nil {
+		return false
+	}
+	return *s.PITR.Enabled
 }
 
 // EffectivePrimaryPod returns the pod that should act as primary.

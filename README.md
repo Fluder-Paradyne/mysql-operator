@@ -230,6 +230,16 @@ With default settings the dump is kept on the backup **PVC and** in S3.
 
  Dumps use `--single-transaction` and binlog coordinates (`--source-data` / `--master-data`) when supported.
 
+## Point-in-time recovery (PITR)
+
+1. Enable **`spec.pitr`** on `MySQL` (binlog CronJob → S3).
+2. Take **`MySQLBackup`** base backups (prefer S3 upload).
+3. Apply **`MySQLRestore`** with `restoreTo.time` (RFC3339) to replay binlogs after the dump.
+
+Sample: `config/samples/mysql_pitr_restore_only.yaml` (edit names/time). Full enablement needs S3 creds like backup.
+
+**Destructive** restore into the target instance. Logical PITR only (not continuous stream / physical).
+
 ## Limitations (current HA model)
 
 - **Async primary/replica only** — not MySQL Group Replication / InnoDB Cluster (no quorum / fencing guarantees)

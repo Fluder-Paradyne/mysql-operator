@@ -88,6 +88,9 @@ spec:
                   format: int32
                   default: 3306
 
+                pitr:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
                 failover:
                   type: object
                   description: Automatic primary promotion when the current primary is unhealthy (HA only)
@@ -158,6 +161,10 @@ spec:
                 rootSecretName:
                   type: string
                 replicationSecretName:
+                  type: string
+                binlogArchivePrefix:
+                  type: string
+                binlogArchiveCronJob:
                   type: string
                 conditions:
                   type: array

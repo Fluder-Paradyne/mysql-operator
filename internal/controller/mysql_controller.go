@@ -10,6 +10,7 @@ import (
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -151,6 +152,11 @@ func (r *MySQLReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 
 	if err := r.ensurePodRoles(ctx, mysql); err != nil {
 		logger.Error(err, "failed to label pod roles")
+		return ctrl.Result{}, err
+	}
+
+	if err := r.ensureBinlogArchive(ctx, mysql, rootSecret, rootKey); err != nil {
+		logger.Error(err, "failed to ensure binlog archive")
 		return ctrl.Result{}, err
 	}
 
@@ -839,6 +845,8 @@ func (r *MySQLReconciler) updateStatus(ctx context.Context, mysql *mysqlv1alpha1
 	lastFO := mysql.Status.LastFailoverTime
 	lastFrom := mysql.Status.LastFailoverFrom
 	lastTo := mysql.Status.LastFailoverTo
+	binlogPrefix := mysql.Status.BinlogArchivePrefix
+	binlogCron := mysql.Status.BinlogArchiveCronJob
 
 	mysql.Status.Phase = phase
 	mysql.Status.ReadyReplicas = sts.Status.ReadyReplicas
@@ -856,6 +864,8 @@ func (r *MySQLReconciler) updateStatus(ctx context.Context, mysql *mysqlv1alpha1
 	mysql.Status.LastFailoverTime = lastFO
 	mysql.Status.LastFailoverFrom = lastFrom
 	mysql.Status.LastFailoverTo = lastTo
+	mysql.Status.BinlogArchivePrefix = binlogPrefix
+	mysql.Status.BinlogArchiveCronJob = binlogCron
 
 	primaryReady := desired == 1 || r.podReady(ctx, mysql.Namespace, primary)
 	ready := sts.Status.ReadyReplicas >= 1 && primaryReady && (desired == 1 || replicating >= desired-1) && !failoverInProgress
@@ -944,6 +954,7 @@ func (r *MySQLReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.Service{}).
 		Owns(&corev1.Secret{}).
 		Owns(&corev1.ConfigMap{}).
+		Owns(&batchv1.CronJob{}).
 		Complete(r)
 }
 

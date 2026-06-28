@@ -111,6 +111,11 @@ func (in *MySQLSpec) DeepCopyInto(out *MySQLSpec) {
 		*out = new(FailoverSpec)
 		(*in).DeepCopyInto(*out)
 	}
+	if in.PITR != nil {
+		in, out := &in.PITR, &out.PITR
+		*out = new(PITRSpec)
+		(*in).DeepCopyInto(*out)
+	}
 }
 
 func (in *MySQLSpec) DeepCopy() *MySQLSpec {
@@ -304,3 +309,157 @@ func (in *SecretNameRef) DeepCopy() *SecretNameRef {
 	return out
 }
 
+
+func (in *PITRSpec) DeepCopyInto(out *PITRSpec) {
+	*out = *in
+	if in.Enabled != nil {
+		in, out := &in.Enabled, &out.Enabled
+		*out = new(bool)
+		**out = **in
+	}
+	if in.BinlogArchive != nil {
+		in, out := &in.BinlogArchive, &out.BinlogArchive
+		*out = new(BinlogArchiveSpec)
+		(*in).DeepCopyInto(*out)
+	}
+}
+
+func (in *PITRSpec) DeepCopy() *PITRSpec {
+	if in == nil {
+		return nil
+	}
+	out := new(PITRSpec)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *BinlogArchiveSpec) DeepCopyInto(out *BinlogArchiveSpec) {
+	*out = *in
+	in.S3.DeepCopyInto(&out.S3)
+}
+
+func (in *BinlogArchiveSpec) DeepCopy() *BinlogArchiveSpec {
+	if in == nil {
+		return nil
+	}
+	out := new(BinlogArchiveSpec)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *MySQLRestore) DeepCopyInto(out *MySQLRestore) {
+	*out = *in
+	out.TypeMeta = in.TypeMeta
+	in.ObjectMeta.DeepCopyInto(&out.ObjectMeta)
+	in.Spec.DeepCopyInto(&out.Spec)
+	in.Status.DeepCopyInto(&out.Status)
+}
+
+func (in *MySQLRestore) DeepCopy() *MySQLRestore {
+	if in == nil {
+		return nil
+	}
+	out := new(MySQLRestore)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *MySQLRestore) DeepCopyObject() runtime.Object {
+	if c := in.DeepCopy(); c != nil {
+		return c
+	}
+	return nil
+}
+
+func (in *MySQLRestoreList) DeepCopyInto(out *MySQLRestoreList) {
+	*out = *in
+	out.TypeMeta = in.TypeMeta
+	in.ListMeta.DeepCopyInto(&out.ListMeta)
+	if in.Items != nil {
+		in, out := &in.Items, &out.Items
+		*out = make([]MySQLRestore, len(*in))
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
+	}
+}
+
+func (in *MySQLRestoreList) DeepCopy() *MySQLRestoreList {
+	if in == nil {
+		return nil
+	}
+	out := new(MySQLRestoreList)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *MySQLRestoreList) DeepCopyObject() runtime.Object {
+	if c := in.DeepCopy(); c != nil {
+		return c
+	}
+	return nil
+}
+
+func (in *MySQLRestoreSpec) DeepCopyInto(out *MySQLRestoreSpec) {
+	*out = *in
+	if in.RestoreTo != nil {
+		in, out := &in.RestoreTo, &out.RestoreTo
+		*out = new(RestoreToSpec)
+		**out = **in
+	}
+	if in.S3 != nil {
+		in, out := &in.S3, &out.S3
+		*out = new(BackupS3Spec)
+		(*in).DeepCopyInto(*out)
+	}
+}
+
+func (in *MySQLRestoreSpec) DeepCopy() *MySQLRestoreSpec {
+	if in == nil {
+		return nil
+	}
+	out := new(MySQLRestoreSpec)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *MySQLRestoreStatus) DeepCopyInto(out *MySQLRestoreStatus) {
+	*out = *in
+	if in.StartTime != nil {
+		in, out := &in.StartTime, &out.StartTime
+		*out = (*in).DeepCopy()
+	}
+	if in.CompletionTime != nil {
+		in, out := &in.CompletionTime, &out.CompletionTime
+		*out = (*in).DeepCopy()
+	}
+	if in.Conditions != nil {
+		in, out := &in.Conditions, &out.Conditions
+		*out = make([]metav1.Condition, len(*in))
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
+	}
+}
+
+func (in *MySQLRestoreStatus) DeepCopy() *MySQLRestoreStatus {
+	if in == nil {
+		return nil
+	}
+	out := new(MySQLRestoreStatus)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *RestoreToSpec) DeepCopyInto(out *RestoreToSpec) {
+	*out = *in
+}
+
+func (in *RestoreToSpec) DeepCopy() *RestoreToSpec {
+	if in == nil {
+		return nil
+	}
+	out := new(RestoreToSpec)
+	in.DeepCopyInto(out)
+	return out
+}
