@@ -1,0 +1,51 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: mysqlrestores.mysql.asrk.dev
+spec:
+  group: mysql.asrk.dev
+  names:
+    kind: MySQLRestore
+    listKind: MySQLRestoreList
+    plural: mysqlrestores
+    singular: mysqlrestore
+    shortNames: [myr]
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      additionalPrinterColumns:
+        - {name: Phase, type: string, jsonPath: .status.phase}
+        - {name: MySQL, type: string, jsonPath: .spec.mysqlName}
+        - {name: Age, type: date, jsonPath: .metadata.creationTimestamp}
+      subresources: {status: {}}
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            apiVersion: {type: string}
+            kind: {type: string}
+            metadata: {type: object}
+            spec:
+              type: object
+              required: [mysqlName]
+              properties:
+                mysqlName: {type: string}
+                backupName: {type: string}
+                backupS3URI: {type: string}
+                binlogS3Prefix: {type: string}
+                image: {type: string}
+                awsCLIImage: {type: string}
+                restoreTo:
+                  type: object
+                  properties:
+                    time: {type: string}
+                    gtid: {type: string}
+                    backupOnly: {type: boolean}
+                s3:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+            status:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
