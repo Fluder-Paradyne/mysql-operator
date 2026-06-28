@@ -50,10 +50,14 @@ envtest:
 test-integration: envtest
 	KUBEBUILDER_ASSETS="$$(./hack/setup-envtest.sh)" go test ./internal/controller/ -count=1 -timeout=5m -v
 
-# Real-cluster e2e: proves MySQL is up (mysqladmin ping + SQL).
+# Real-cluster e2e: standalone + HA replication + automatic failover.
 # Requires kubeconfig with a working cluster and the CRD installed (`make install`).
 test-e2e: install
-	go test ./test/e2e/ -tags=e2e -count=1 -timeout=15m -v
+	go test ./test/e2e/ -tags=e2e -count=1 -timeout=25m -v
+
+# Failover-only e2e (faster feedback while iterating on promotion logic).
+test-e2e-failover: install
+	go test ./test/e2e/ -tags=e2e -count=1 -timeout=15m -run 'TestMySQLAutomaticFailover' -v
 
 # Spins up kind (if needed) and runs e2e — fully local, no pre-existing cluster required
 # beyond Docker + kind + kubectl.
