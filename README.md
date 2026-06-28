@@ -92,6 +92,24 @@ Two layers prove the operator works locally:
 | `make test-e2e` | Real MySQL: status `Running`, `mysqladmin ping`, `SELECT 1`, app DB, read/write | Existing kubeconfig + CRD (`make install`) |
 | `make test-e2e-kind` | Same as e2e, but creates/reuses a local **kind** cluster first | Docker + kind + kubectl |
 | `make test-e2e-s3` | **S3 export** via in-cluster **MinIO** (`TestMySQLBackupS3MinIO`) | kind + CRDs |
+| `make test-e2e-pitr` | **PITR** backup + binlogs + restore-to-time on MinIO | kind + CRDs |
+
+### Scheduled backups (retention)
+
+On the `MySQL` CR, set `spec.backup` to create **`MySQLBackup`** objects on a cron schedule and **delete scheduled backups older than N days** (default **30**). Only backups labeled as scheduled (`mysql.asrk.dev/scheduled-backup=true`) are GC'd; on-demand `MySQLBackup` CRs you create by hand are kept.
+
+```yaml
+spec:
+  backup:
+    enabled: true
+    schedule: "0 2 * * *"   # 02:00 UTC daily
+    retentionDays: 30
+    storageSize: 5Gi
+    # optional S3 — see config/samples/mysql_scheduled_backup.yaml
+```
+
+Status: `lastScheduledBackup`, `lastScheduledBackupTime`, `backupRetentionDays`.  
+**Note:** retention removes the **MySQLBackup CR + owned PVC/Job**. S3 objects are not deleted by the operator (use bucket lifecycle rules for `mysql-backups/.../scheduled/`).
 
 ```bash
 # Fast (no cluster): controller integration via envtest

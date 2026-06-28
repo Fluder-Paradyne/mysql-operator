@@ -1,0 +1,23 @@
+apiVersion: mysql.asrk.dev/v1alpha1
+kind: MySQL
+metadata:
+  name: app-mysql
+spec:
+  replicas: 1
+  storageSize: 10Gi
+  database: app
+  # Recurring logical backups; operator creates MySQLBackup CRs named <mysql>-auto-<timestamp>.
+  backup:
+    enabled: true
+    schedule: "0 2 * * *"   # 02:00 UTC daily
+    retentionDays: 30       # delete scheduled MySQLBackups (and owned PVCs) older than 30 days
+    storageSize: 5Gi
+    # Optional S3/MinIO export (omit for PVC-only scheduled backups)
+    # s3:
+    #   bucket: mysql-backups
+    #   region: us-east-1
+    #   endpoint: http://minio.minio.svc.cluster.local:9000
+    #   forcePathStyle: true
+    #   skipPVC: true
+    #   credentialsSecretRef:
+    #     name: aws-backup-creds

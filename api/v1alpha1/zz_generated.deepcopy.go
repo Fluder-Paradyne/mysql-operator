@@ -116,6 +116,11 @@ func (in *MySQLSpec) DeepCopyInto(out *MySQLSpec) {
 		*out = new(PITRSpec)
 		(*in).DeepCopyInto(*out)
 	}
+	if in.Backup != nil {
+		in, out := &in.Backup, &out.Backup
+		*out = new(ScheduledBackupSpec)
+		(*in).DeepCopyInto(*out)
+	}
 }
 
 func (in *MySQLSpec) DeepCopy() *MySQLSpec {
@@ -123,6 +128,44 @@ func (in *MySQLSpec) DeepCopy() *MySQLSpec {
 		return nil
 	}
 	out := new(MySQLSpec)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *ScheduledBackupSpec) DeepCopyInto(out *ScheduledBackupSpec) {
+	*out = *in
+	if in.Enabled != nil {
+		in, out := &in.Enabled, &out.Enabled
+		*out = new(bool)
+		**out = **in
+	}
+	if in.RetentionDays != nil {
+		in, out := &in.RetentionDays, &out.RetentionDays
+		*out = new(int32)
+		**out = **in
+	}
+	if in.Suspend != nil {
+		in, out := &in.Suspend, &out.Suspend
+		*out = new(bool)
+		**out = **in
+	}
+	if in.StorageClassName != nil {
+		in, out := &in.StorageClassName, &out.StorageClassName
+		*out = new(string)
+		**out = **in
+	}
+	if in.S3 != nil {
+		in, out := &in.S3, &out.S3
+		*out = new(BackupS3Spec)
+		**out = **in
+	}
+}
+
+func (in *ScheduledBackupSpec) DeepCopy() *ScheduledBackupSpec {
+	if in == nil {
+		return nil
+	}
+	out := new(ScheduledBackupSpec)
 	in.DeepCopyInto(out)
 	return out
 }
@@ -135,6 +178,10 @@ func (in *MySQLStatus) DeepCopyInto(out *MySQLStatus) {
 	}
 	if in.LastFailoverTime != nil {
 		in, out := &in.LastFailoverTime, &out.LastFailoverTime
+		*out = (*in).DeepCopy()
+	}
+	if in.LastScheduledBackupTime != nil {
+		in, out := &in.LastScheduledBackupTime, &out.LastScheduledBackupTime
 		*out = (*in).DeepCopy()
 	}
 	if in.Conditions != nil {

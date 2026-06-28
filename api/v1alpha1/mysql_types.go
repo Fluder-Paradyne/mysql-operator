@@ -60,6 +60,75 @@ type MySQLSpec struct {
 	// PITR enables binlog archiving for point-in-time recovery (used with MySQLBackup + MySQLRestore).
 	// +optional
 	PITR *PITRSpec `json:"pitr,omitempty"`
+
+	// Backup configures scheduled logical backups (creates MySQLBackup CRs) and retention.
+	// +optional
+	Backup *ScheduledBackupSpec `json:"backup,omitempty"`
+}
+
+// ScheduledBackupSpec runs recurring MySQLBackup objects and deletes ones older than retention.
+type ScheduledBackupSpec struct {
+	// Enabled turns the schedule on. Default false when omitted.
+	// +optional
+	Enabled *bool `json:"enabled,omitempty"`
+
+	// Schedule is a standard cron expression (5 fields, UTC). Default "0 2 * * *" (02:00 UTC daily).
+	// +optional
+	Schedule string `json:"schedule,omitempty"`
+
+	// RetentionDays is how long to keep scheduled MySQLBackup objects (and their PVCs).
+	// Older successful/failed scheduled backups are deleted. Default 30.
+	// +kubebuilder:default=30
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=3650
+	// +optional
+	RetentionDays *int32 `json:"retentionDays,omitempty"`
+
+	// Suspend stops creating new backups (retention GC still runs).
+	// +optional
+	Suspend *bool `json:"suspend,omitempty"`
+
+	// StorageSize for each scheduled backup PVC (when not using S3-only).
+	// +kubebuilder:default="5Gi"
+	// +optional
+	StorageSize string `json:"storageSize,omitempty"`
+
+	// StorageClassName for backup PVCs.
+	// +optional
+	StorageClassName *string `json:"storageClassName,omitempty"`
+
+	// S3, when set, uploads each scheduled backup to S3/MinIO (same shape as MySQLBackup.spec.s3).
+	// +optional
+	S3 *BackupS3Spec `json:"s3,omitempty"`
+}
+
+// BackupScheduleEnabled reports whether scheduled backups should run.
+func (s *MySQLSpec) BackupScheduleEnabled() bool {
+	if s.Backup == nil || s.Backup.Enabled == nil {
+		return false
+	}
+	return *s.Backup.Enabled
+}
+
+// BackupRetentionDays returns retention window (default 30).
+func (s *MySQLSpec) BackupRetentionDays() int32 {
+	if s.Backup == nil || s.Backup.RetentionDays == nil || *s.Backup.RetentionDays < 1 {
+		return 30
+	}
+	return *s.Backup.RetentionDays
+}
+
+// BackupCronSchedule returns the cron schedule (default daily 02:00 UTC).
+func (s *MySQLSpec) BackupCronSchedule() string {
+	if s.Backup == nil || s.Backup.Schedule == "" {
+		return "0 2 * * *"
+	}
+	return s.Backup.Schedule
+}
+
+// BackupSuspended is true when new scheduled backups must not be created.
+func (s *MySQLSpec) BackupSuspended() bool {
+	return s.Backup != nil && s.Backup.Suspend != nil && *s.Backup.Suspend
 }
 
 // FailoverSpec configures automatic failover behaviour.
@@ -162,6 +231,18 @@ type MySQLStatus struct {
 	// BinlogArchiveCronJob is the CronJob name that ships binlogs.
 	// +optional
 	BinlogArchiveCronJob string `json:"binlogArchiveCronJob,omitempty"`
+
+	// LastScheduledBackup is the name of the most recent scheduled MySQLBackup CR.
+	// +optional
+	LastScheduledBackup string `json:"lastScheduledBackup,omitempty"`
+
+	// LastScheduledBackupTime is when the last scheduled MySQLBackup was created.
+	// +optional
+	LastScheduledBackupTime *metav1.Time `json:"lastScheduledBackupTime,omitempty"`
+
+	// BackupRetentionDays mirrors the effective retention window applied to scheduled backups.
+	// +optional
+	BackupRetentionDays int32 `json:"backupRetentionDays,omitempty"`
 
 	// Conditions represent the latest available observations of the MySQL state.
 	// +optional
