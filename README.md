@@ -206,7 +206,29 @@ kubectl run -it --rm restore-shell --image=mysql:8.0 --restart=Never \
 | `spec.image` | Job image (defaults to the MySQL CR image) |
 | `status.pvcName` / `fileName` | Where the gzipped dump lives |
 
-The Job connects to the instance **primary Service** using the root Secret. Dumps use `--single-transaction` and binlog coordinates (`--source-data` / `--master-data`) when supported.
+The Job connects to the instance **primary Service** using the root Secret.
+
+### S3 / MinIO export
+
+Set `spec.s3` to upload `dump.sql.gz` after the dump (init container = mysqldump, main = `amazon/aws-cli`):
+
+```yaml
+spec:
+  mysqlName: ha-mysql
+  s3:
+    bucket: my-mysql-backups
+    region: us-east-1
+    credentialsSecretRef:
+      name: aws-backup-creds   # keys: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
+    # endpoint: https://minio:9000
+    # forcePathStyle: true
+    # skipPVC: true            # emptyDir only; object only in S3
+```
+
+On success, `status.s3URI` is set (e.g. `s3://my-mysql-backups/mysql-backups/ha-mysql/ha-mysql-backup-s3/dump.sql.gz`).
+With default settings the dump is kept on the backup **PVC and** in S3.
+
+ Dumps use `--single-transaction` and binlog coordinates (`--source-data` / `--master-data`) when supported.
 
 ## Limitations (current HA model)
 

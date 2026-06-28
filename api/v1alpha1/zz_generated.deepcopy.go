@@ -163,6 +163,20 @@ func (in *SecretKeySelector) DeepCopy() *SecretKeySelector {
 	return out
 }
 
+func (in *BackupS3Spec) DeepCopyInto(out *BackupS3Spec) {
+	*out = *in
+	out.CredentialsSecretRef = in.CredentialsSecretRef
+}
+
+func (in *BackupS3Spec) DeepCopy() *BackupS3Spec {
+	if in == nil {
+		return nil
+	}
+	out := new(BackupS3Spec)
+	in.DeepCopyInto(out)
+	return out
+}
+
 func (in *MySQLBackup) DeepCopyInto(out *MySQLBackup) {
 	*out = *in
 	out.TypeMeta = in.TypeMeta
@@ -233,6 +247,11 @@ func (in *MySQLBackupSpec) DeepCopyInto(out *MySQLBackupSpec) {
 		*out = new(int32)
 		**out = **in
 	}
+	if in.S3 != nil {
+		in, out := &in.S3, &out.S3
+		*out = new(BackupS3Spec)
+		(*in).DeepCopyInto(*out)
+	}
 }
 
 func (in *MySQLBackupSpec) DeepCopy() *MySQLBackupSpec {
@@ -271,3 +290,17 @@ func (in *MySQLBackupStatus) DeepCopy() *MySQLBackupStatus {
 	in.DeepCopyInto(out)
 	return out
 }
+
+func (in *SecretNameRef) DeepCopyInto(out *SecretNameRef) {
+	*out = *in
+}
+
+func (in *SecretNameRef) DeepCopy() *SecretNameRef {
+	if in == nil {
+		return nil
+	}
+	out := new(SecretNameRef)
+	in.DeepCopyInto(out)
+	return out
+}
+

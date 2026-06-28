@@ -26,6 +26,9 @@ spec:
         - name: PVC
           type: string
           jsonPath: .status.pvcName
+        - name: S3
+          type: string
+          jsonPath: .status.s3URI
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp
@@ -61,6 +64,33 @@ spec:
                 ttlSecondsAfterFinished:
                   type: integer
                   format: int32
+                awsCLIImage:
+                  type: string
+                  default: amazon/aws-cli:2.15.0
+                s3:
+                  type: object
+                  required: [bucket, credentialsSecretRef]
+                  properties:
+                    bucket:
+                      type: string
+                    prefix:
+                      type: string
+                    objectKey:
+                      type: string
+                    region:
+                      type: string
+                    endpoint:
+                      type: string
+                    forcePathStyle:
+                      type: boolean
+                    credentialsSecretRef:
+                      type: object
+                      required: [name]
+                      properties:
+                        name:
+                          type: string
+                    skipPVC:
+                      type: boolean
             status:
               type: object
               properties:
@@ -71,6 +101,8 @@ spec:
                 pvcName:
                   type: string
                 fileName:
+                  type: string
+                s3URI:
                   type: string
                 message:
                   type: string
