@@ -18,10 +18,27 @@ When you create a `MySQL` custom resource, the operator reconciles:
 
 With **`spec.replicas >= 2`**, the operator configures **asynchronous GTID replication**:
 
-1. Pod `*-0` is the **primary** (writes)
-2. Pods `*-1` … `*-(N-1)` are **replicas**
+1. Initial primary is pod `*-0` (stored in `status.primaryPod`)
+2. Other pods are **replicas**
 3. Replicas are bootstrapped with MySQL 8 **CLONE** from the primary, then `CHANGE REPLICATION SOURCE` + `START REPLICA`
-4. Status tracks `mode=PrimaryReplica`, `replicating`, and a `ReplicationHealthy` condition
+4. Status tracks `mode=PrimaryReplica`, `replicating`, `primaryPod`, and conditions
+
+### Automatic failover
+
+When `replicas > 1`, **automatic failover is on by default** (`spec.failover.enabled`, default `true`):
+
+1. If the current primary stays **Not Ready** for `spec.failover.unhealthySeconds` (default **30s**), the operator picks a **Ready** replica (highest ordinal) and **promotes** it (`STOP/RESET REPLICA`, `read_only=0`).
+2. Updates `status.primaryPod` and pod role labels so **`*-primary` Service** points at the new writer.
+3. Re-points remaining members (including a recovered old primary) at the new source with GTID auto-position.
+4. Status: `phase=FailingOver` / `PrimaryDown`, `lastFailoverFrom` / `lastFailoverTo` / `lastFailoverTime`, condition `AutomaticFailover`.
+
+Disable with:
+
+```yaml
+spec:
+  failover:
+    enabled: false
+```
 
 ### HA example
 
@@ -165,15 +182,16 @@ spec:
 
 ## Limitations (current HA model)
 
-- **Async primary/replica only** — not MySQL Group Replication / InnoDB Cluster (no automatic primary failover election)
-- Primary is **fixed as pod-0**; losing the primary needs a **manual failover** (promote a replica, retarget services) — not automated yet
+- **Async primary/replica only** — not MySQL Group Replication / InnoDB Cluster (no quorum / fencing guarantees)
+- Failover promotes the **highest-ordinal Ready** replica (not lag-aware GTID election); brief write unavailability during promotion
+- No STONITH / guaranteed old-primary fencing beyond `read_only` on replicas — a split-brain window is possible if the old primary returns writable without operator demotion completing
 - Replica bootstrap uses **CLONE** (MySQL 8+); first HA bring-up can take several minutes
 - No automated backups, rolling major-version upgrades, or app user management beyond root / `repl`
 - Storage size / class changes on existing PVCs are not resized by the operator
 
 ## Next steps you might want
 
-1. Automatic failover (detect primary loss, re-label, `STOP REPLICA` / `RESET` / promote)
+1. Lag-aware candidate selection (compare GTID executed sets)
 2. Semi-sync replication or Group Replication for stronger HA guarantees
 3. Backup CronJob (mysqldump / XtraBackup)
 4. Validating admission webhook for `spec`

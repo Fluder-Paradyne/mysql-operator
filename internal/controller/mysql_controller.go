@@ -135,6 +135,20 @@ func (r *MySQLReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return ctrl.Result{}, err
 	}
 
+	// Primary defaults to <name>-0 via EffectivePrimaryPod() until failover updates status.
+
+	failoverRequeue, err := r.reconcileFailover(ctx, mysql, rootSecret, rootKey, replSecret, replKey)
+	if err != nil {
+		logger.Error(err, "failover reconciliation failed")
+		_ = r.updateStatus(ctx, mysql, sts, rootSecret, replSecret, 0)
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
+	// Re-fetch after possible status updates from failover.
+	if err := r.Get(ctx, req.NamespacedName, mysql); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	if err := r.ensurePodRoles(ctx, mysql); err != nil {
 		logger.Error(err, "failed to label pod roles")
 		return ctrl.Result{}, err
@@ -153,12 +167,12 @@ func (r *MySQLReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return ctrl.Result{}, err
 	}
 
-	if requeue {
-		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
+	if failoverRequeue || requeue {
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
-	// Periodically re-check replication health when HA is enabled.
+	// Periodically re-check replication + primary health when HA is enabled.
 	if mysql.Spec.DesiredReplicas() > 1 {
-		return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
+		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 	}
 	return ctrl.Result{}, nil
 }
@@ -565,6 +579,7 @@ func (r *MySQLReconciler) ensureStatefulSet(ctx context.Context, mysql *mysqlv1a
 
 func (r *MySQLReconciler) ensurePodRoles(ctx context.Context, mysql *mysqlv1alpha1.MySQL) error {
 	desired := mysql.Spec.DesiredReplicas()
+	primary := mysql.EffectivePrimaryPod()
 	for i := int32(0); i < desired; i++ {
 		podName := fmt.Sprintf("%s-%d", mysql.Name, i)
 		pod := &corev1.Pod{}
@@ -575,7 +590,7 @@ func (r *MySQLReconciler) ensurePodRoles(ctx context.Context, mysql *mysqlv1alph
 			return err
 		}
 		role := roleReplica
-		if i == 0 {
+		if podName == primary {
 			role = rolePrimary
 		}
 		if pod.Labels == nil {
@@ -599,7 +614,7 @@ func (r *MySQLReconciler) ensurePodRoles(ctx context.Context, mysql *mysqlv1alph
 }
 
 // ensureReplication configures the replication user on the primary and GTID replicas on followers.
-// Returns (requeue, replicatingCount, err).
+// Returns (requeue, replicatingCount, err). Primary is taken from status (supports failover).
 func (r *MySQLReconciler) ensureReplication(ctx context.Context, mysql *mysqlv1alpha1.MySQL, rootSecret, rootKey, replSecret, replKey string) (bool, int32, error) {
 	desired := mysql.Spec.DesiredReplicas()
 	if desired <= 1 {
@@ -618,8 +633,9 @@ func (r *MySQLReconciler) ensureReplication(ctx context.Context, mysql *mysqlv1a
 		return true, 0, err
 	}
 
-	primaryPod := primaryPodName(mysql)
+	primaryPod := mysql.EffectivePrimaryPod()
 	if !r.podReady(ctx, mysql.Namespace, primaryPod) {
+		// Failover path will promote; do not treat as hard error.
 		return true, 0, nil
 	}
 
@@ -629,6 +645,8 @@ CREATE USER IF NOT EXISTS '%s'@'%%' IDENTIFIED BY '%s';
 ALTER USER '%s'@'%%' IDENTIFIED BY '%s';
 GRANT REPLICATION SLAVE, REPLICATION CLIENT, BACKUP_ADMIN, CLONE_ADMIN ON *.* TO '%s'@'%%';
 FLUSH PRIVILEGES;
+SET GLOBAL read_only=0;
+SET GLOBAL super_read_only=0;
 `, replUser, escapeSQL(replPass), replUser, escapeSQL(replPass), replUser)
 	if _, err := r.execSQL(ctx, mysql.Namespace, primaryPod, rootPass, createReplSQL); err != nil {
 		return true, 0, fmt.Errorf("primary replication user: %w", err)
@@ -638,21 +656,26 @@ FLUSH PRIVILEGES;
 	var replicating int32
 	requeue := false
 
-	for i := int32(1); i < desired; i++ {
+	for i := int32(0); i < desired; i++ {
 		podName := fmt.Sprintf("%s-%d", mysql.Name, i)
+		if podName == primaryPod {
+			continue
+		}
 		if !r.podReady(ctx, mysql.Namespace, podName) {
 			requeue = true
 			continue
 		}
 
+		// Already replicating from the current primary?
+		hostOut, _ := r.execSQL(ctx, mysql.Namespace, podName, rootPass,
+			`SELECT COALESCE(HOST,'') FROM performance_schema.replication_connection_configuration LIMIT 1;`)
 		statusOut, err := r.execSQL(ctx, mysql.Namespace, podName, rootPass,
 			`SELECT COALESCE(SERVICE_STATE,'') FROM performance_schema.replication_connection_status LIMIT 1;`)
 		if err != nil {
-			// performance_schema might not have a row yet.
 			statusOut = ""
 		}
-		if strings.Contains(statusOut, "ON") {
-			// Also verify SQL thread.
+		pointsAtPrimary := strings.Contains(hostOut, primaryPod) || strings.Contains(hostOut, primaryHost)
+		if pointsAtPrimary && strings.Contains(statusOut, "ON") {
 			sqlOut, _ := r.execSQL(ctx, mysql.Namespace, podName, rootPass,
 				`SELECT COALESCE(SERVICE_STATE,'') FROM performance_schema.replication_applier_status LIMIT 1;`)
 			if strings.Contains(sqlOut, "ON") {
@@ -661,35 +684,27 @@ FLUSH PRIVILEGES;
 			}
 		}
 
-		// Bootstrap replica via CLONE (MySQL 8), then configure GTID replication.
-		// CLONE restarts the server; we tolerate errors and requeue.
-		cloneSQL := fmt.Sprintf(`
-INSTALL PLUGIN IF NOT EXISTS clone SONAME 'mysql_clone.so';
-SET GLOBAL clone_valid_donor_list = '%s:%d';
-`, primaryHost, effectivePort(mysql))
-		if _, err := r.execSQL(ctx, mysql.Namespace, podName, rootPass, cloneSQL); err != nil {
-			// Plugin may already exist under a different path; continue to CLONE.
-			log.FromContext(ctx).Info("clone plugin setup", "pod", podName, "err", err.Error())
-		}
-
-		// Only clone when not yet replicating — expensive but required for consistent data.
+		// Fresh members (never cloned): bootstrap via CLONE. After failover, members already have data — skip CLONE.
 		markerOut, _ := r.execInPod(ctx, mysql.Namespace, podName, "mysql", []string{
 			"bash", "-c", "test -f /var/lib/mysql/.operator_cloned && echo yes || echo no",
 		})
-		if !strings.Contains(markerOut, "yes") {
+		if !strings.Contains(markerOut, "yes") && !mysql.Status.FailoverInProgress {
+			cloneSQL := fmt.Sprintf(`
+INSTALL PLUGIN IF NOT EXISTS clone SONAME 'mysql_clone.so';
+SET GLOBAL clone_valid_donor_list = '%s:%d';
+`, primaryHost, effectivePort(mysql))
+			if _, err := r.execSQL(ctx, mysql.Namespace, podName, rootPass, cloneSQL); err != nil {
+				log.FromContext(ctx).Info("clone plugin setup", "pod", podName, "err", err.Error())
+			}
 			cloneInstance := fmt.Sprintf(
 				`CLONE INSTANCE FROM '%s'@'%s':%d IDENTIFIED BY '%s';`,
 				replUser, primaryHost, effectivePort(mysql), escapeSQL(replPass),
 			)
 			_, cloneErr := r.execSQL(ctx, mysql.Namespace, podName, rootPass, cloneInstance)
-			// CLONE restarts mysqld; connection errors are expected.
 			if cloneErr != nil {
 				log.FromContext(ctx).Info("clone instance requested", "pod", podName, "err", cloneErr.Error())
 			}
-			// Wait for mysqld to come back, then mark and configure replication.
 			requeue = true
-			// Best-effort marker after a short wait is done on next reconcile when pod is ready again.
-			// Write marker via a follow-up once SQL works.
 			if r.podReady(ctx, mysql.Namespace, podName) {
 				_, _ = r.execInPod(ctx, mysql.Namespace, podName, "mysql", []string{
 					"bash", "-c", "touch /var/lib/mysql/.operator_cloned",
@@ -697,9 +712,14 @@ SET GLOBAL clone_valid_donor_list = '%s:%d';
 			}
 			continue
 		}
+		// Ensure marker exists for post-failover members so we don't CLONE over promoted data later.
+		_, _ = r.execInPod(ctx, mysql.Namespace, podName, "mysql", []string{
+			"bash", "-c", "touch /var/lib/mysql/.operator_cloned",
+		})
 
 		changeSQL := fmt.Sprintf(`
 STOP REPLICA;
+RESET REPLICA ALL;
 CHANGE REPLICATION SOURCE TO
   SOURCE_HOST='%s',
   SOURCE_PORT=%d,
@@ -708,6 +728,8 @@ CHANGE REPLICATION SOURCE TO
   SOURCE_AUTO_POSITION=1,
   GET_SOURCE_PUBLIC_KEY=1;
 START REPLICA;
+SET GLOBAL read_only=1;
+SET GLOBAL super_read_only=1;
 `, primaryHost, effectivePort(mysql), replUser, escapeSQL(replPass))
 		if _, err := r.execSQL(ctx, mysql.Namespace, podName, rootPass, changeSQL); err != nil {
 			requeue = true
@@ -786,6 +808,7 @@ func (r *MySQLReconciler) execInPod(ctx context.Context, namespace, pod, contain
 
 func (r *MySQLReconciler) updateStatus(ctx context.Context, mysql *mysqlv1alpha1.MySQL, sts *appsv1.StatefulSet, rootSecret, replSecret string, replicating int32) error {
 	desired := mysql.Spec.DesiredReplicas()
+	primary := mysql.EffectivePrimaryPod()
 	phase := "Pending"
 	if sts.Status.ReadyReplicas > 0 {
 		phase = "Running"
@@ -799,25 +822,43 @@ func (r *MySQLReconciler) updateStatus(ctx context.Context, mysql *mysqlv1alpha1
 	if desired > 1 && replicating >= desired-1 && sts.Status.ReadyReplicas >= desired {
 		phase = "Ready"
 	}
+	if mysql.Status.FailoverInProgress {
+		phase = "FailingOver"
+	} else if desired > 1 && mysql.Spec.FailoverEnabled() && !r.podReady(ctx, mysql.Namespace, primary) {
+		phase = "PrimaryDown"
+	}
 
 	mode := "Standalone"
 	if desired > 1 {
 		mode = "PrimaryReplica"
 	}
 
+	// Preserve failover bookkeeping fields already set on mysql.Status.
+	unhealthySince := mysql.Status.PrimaryUnhealthySince
+	failoverInProgress := mysql.Status.FailoverInProgress
+	lastFO := mysql.Status.LastFailoverTime
+	lastFrom := mysql.Status.LastFailoverFrom
+	lastTo := mysql.Status.LastFailoverTo
+
 	mysql.Status.Phase = phase
 	mysql.Status.ReadyReplicas = sts.Status.ReadyReplicas
 	mysql.Status.DesiredReplicas = desired
 	mysql.Status.Mode = mode
-	mysql.Status.PrimaryPod = primaryPodName(mysql)
+	mysql.Status.PrimaryPod = primary
 	mysql.Status.PrimaryService = primaryServiceName(mysql)
 	mysql.Status.ReadsService = readsServiceName(mysql)
 	mysql.Status.HeadlessService = headlessServiceName(mysql)
 	mysql.Status.Replicating = replicating
 	mysql.Status.RootSecretName = rootSecret
 	mysql.Status.ReplicationSecretName = replSecret
+	mysql.Status.PrimaryUnhealthySince = unhealthySince
+	mysql.Status.FailoverInProgress = failoverInProgress
+	mysql.Status.LastFailoverTime = lastFO
+	mysql.Status.LastFailoverFrom = lastFrom
+	mysql.Status.LastFailoverTo = lastTo
 
-	ready := sts.Status.ReadyReplicas >= desired && (desired == 1 || replicating >= desired-1)
+	primaryReady := desired == 1 || r.podReady(ctx, mysql.Namespace, primary)
+	ready := sts.Status.ReadyReplicas >= 1 && primaryReady && (desired == 1 || replicating >= desired-1) && !failoverInProgress
 	cond := metav1.Condition{
 		Type:               "Ready",
 		Status:             metav1.ConditionFalse,
@@ -831,10 +872,32 @@ func (r *MySQLReconciler) updateStatus(ctx context.Context, mysql *mysqlv1alpha1
 		cond.Reason = "Ready"
 		cond.Message = "MySQL primary is ready"
 		if desired > 1 {
-			cond.Message = fmt.Sprintf("MySQL primary ready with %d/%d replicas replicating", replicating, desired-1)
+			cond.Message = fmt.Sprintf("primary %s ready with %d/%d replicas replicating", primary, replicating, desired-1)
 		}
 	}
 	setCondition(&mysql.Status.Conditions, cond)
+
+	foCond := metav1.Condition{
+		Type:               "AutomaticFailover",
+		Status:             metav1.ConditionFalse,
+		Reason:             "Disabled",
+		Message:            "Automatic failover not applicable",
+		LastTransitionTime: metav1.Now(),
+		ObservedGeneration: mysql.Generation,
+	}
+	if desired > 1 && mysql.Spec.FailoverEnabled() {
+		foCond.Status = metav1.ConditionTrue
+		foCond.Reason = "Enabled"
+		foCond.Message = fmt.Sprintf("watching primary %s (promote after %ds unhealthy)", primary, mysql.Spec.FailoverUnhealthySeconds())
+		if failoverInProgress {
+			foCond.Reason = "InProgress"
+			foCond.Message = "failover promotion in progress"
+		} else if unhealthySince != nil {
+			foCond.Reason = "PrimaryUnhealthy"
+			foCond.Message = fmt.Sprintf("primary %s unhealthy since %s", primary, unhealthySince.Format(time.RFC3339))
+		}
+	}
+	setCondition(&mysql.Status.Conditions, foCond)
 
 	replCond := metav1.Condition{
 		Type:               "ReplicationHealthy",

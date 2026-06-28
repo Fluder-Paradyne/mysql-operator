@@ -30,4 +30,4 @@ kubectl apply -f "${ROOT}/config/crd/mysql.asrk.dev_mysqls.yaml"
 
 echo "Running e2e tests..."
 cd "${ROOT}"
-go test ./test/e2e/ -tags=e2e -count=1 -timeout=15m -v
+go test ./test/e2e/ -tags=e2e -count=1 -timeout=25m -v

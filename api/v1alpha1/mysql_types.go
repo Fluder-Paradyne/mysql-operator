@@ -8,7 +8,7 @@ import (
 // MySQLSpec defines the desired state of MySQL.
 type MySQLSpec struct {
 	// Replicas is the number of MySQL pods in the StatefulSet.
-	// 1 = standalone primary. 2+ = primary (pod-0) plus asynchronous GTID replicas for HA / read scaling.
+	// 1 = standalone primary. 2+ = primary plus asynchronous GTID replicas for HA / read scaling.
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:validation:Maximum=5
 	// +kubebuilder:default=1
@@ -51,6 +51,26 @@ type MySQLSpec struct {
 	// +kubebuilder:default=3306
 	// +optional
 	Port int32 `json:"port,omitempty"`
+
+	// Failover controls automatic primary promotion when the current primary is unhealthy.
+	// Only applies when replicas > 1.
+	// +optional
+	Failover *FailoverSpec `json:"failover,omitempty"`
+}
+
+// FailoverSpec configures automatic failover behaviour.
+type FailoverSpec struct {
+	// Enabled turns automatic failover on or off. Defaults to true when the field is omitted
+	// and replicas > 1 (see FailoverEnabled()).
+	// +optional
+	Enabled *bool `json:"enabled,omitempty"`
+
+	// UnhealthySeconds is how long the primary must stay not-Ready before promotion.
+	// +kubebuilder:default=30
+	// +kubebuilder:validation:Minimum=5
+	// +kubebuilder:validation:Maximum=600
+	// +optional
+	UnhealthySeconds *int32 `json:"unhealthySeconds,omitempty"`
 }
 
 // SecretKeySelector selects a key of a Secret.
@@ -81,7 +101,8 @@ type MySQLStatus struct {
 	// +optional
 	Mode string `json:"mode,omitempty"`
 
-	// PrimaryPod is the StatefulSet pod acting as the writable primary (usually <name>-0).
+	// PrimaryPod is the StatefulSet pod acting as the writable primary.
+	// Updated by the operator during automatic failover.
 	// +optional
 	PrimaryPod string `json:"primaryPod,omitempty"`
 
@@ -100,6 +121,27 @@ type MySQLStatus struct {
 	// Replicating is the number of replicas that report IO+SQL threads running.
 	// +optional
 	Replicating int32 `json:"replicating,omitempty"`
+
+	// FailoverInProgress is true while a promotion is underway.
+	// +optional
+	FailoverInProgress bool `json:"failoverInProgress,omitempty"`
+
+	// PrimaryUnhealthySince is set when the current primary is first observed not Ready.
+	// Cleared when the primary becomes Ready again or after a successful failover.
+	// +optional
+	PrimaryUnhealthySince *metav1.Time `json:"primaryUnhealthySince,omitempty"`
+
+	// LastFailoverTime is when the last successful automatic failover completed.
+	// +optional
+	LastFailoverTime *metav1.Time `json:"lastFailoverTime,omitempty"`
+
+	// LastFailoverFrom is the pod name that was primary before the last failover.
+	// +optional
+	LastFailoverFrom string `json:"lastFailoverFrom,omitempty"`
+
+	// LastFailoverTo is the pod name promoted in the last failover.
+	// +optional
+	LastFailoverTo string `json:"lastFailoverTo,omitempty"`
 
 	// RootSecretName is the Secret containing the root password.
 	// +optional
@@ -120,6 +162,7 @@ type MySQLStatus struct {
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.readyReplicas`
+// +kubebuilder:printcolumn:name="Primary",type=string,JSONPath=`.status.primaryPod`
 // +kubebuilder:printcolumn:name="Mode",type=string,JSONPath=`.status.mode`
 // +kubebuilder:printcolumn:name="Replicating",type=integer,JSONPath=`.status.replicating`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
@@ -153,4 +196,32 @@ func (s *MySQLSpec) DesiredReplicas() int32 {
 		return 1
 	}
 	return *s.Replicas
+}
+
+// FailoverEnabled reports whether automatic failover should run (HA only).
+// Default is enabled when Failover is nil or Enabled is nil.
+func (s *MySQLSpec) FailoverEnabled() bool {
+	if s.DesiredReplicas() <= 1 {
+		return false
+	}
+	if s.Failover == nil || s.Failover.Enabled == nil {
+		return true
+	}
+	return *s.Failover.Enabled
+}
+
+// FailoverUnhealthySeconds returns the primary unhealthy grace period.
+func (s *MySQLSpec) FailoverUnhealthySeconds() int32 {
+	if s.Failover != nil && s.Failover.UnhealthySeconds != nil && *s.Failover.UnhealthySeconds > 0 {
+		return *s.Failover.UnhealthySeconds
+	}
+	return 30
+}
+
+// EffectivePrimaryPod returns the pod that should act as primary.
+func (m *MySQL) EffectivePrimaryPod() string {
+	if m.Status.PrimaryPod != "" {
+		return m.Status.PrimaryPod
+	}
+	return m.Name + "-0"
 }
