@@ -123,6 +123,52 @@ spec:
                                   type: string
                               required:
                                 - name
+                backup:
+                  type: object
+                  description: Scheduled logical backups (MySQLBackup CRs) with retention
+                  properties:
+                    enabled:
+                      type: boolean
+                    schedule:
+                      type: string
+                      description: "Cron schedule UTC (default 0 2 * * *)"
+                    retentionDays:
+                      type: integer
+                      format: int32
+                      minimum: 1
+                      maximum: 3650
+                      default: 30
+                      description: Delete scheduled backups older than this many days (default 30)
+                    suspend:
+                      type: boolean
+                    storageSize:
+                      type: string
+                    storageClassName:
+                      type: string
+                    s3:
+                      type: object
+                      properties:
+                        bucket:
+                          type: string
+                        region:
+                          type: string
+                        endpoint:
+                          type: string
+                        forcePathStyle:
+                          type: boolean
+                        prefix:
+                          type: string
+                        skipPVC:
+                          type: boolean
+                        objectKey:
+                          type: string
+                        credentialsSecretRef:
+                          type: object
+                          properties:
+                            name:
+                              type: string
+                          required:
+                            - name
                 failover:
                   type: object
                   description: Automatic primary promotion when the current primary is unhealthy (HA only)
@@ -198,6 +244,14 @@ spec:
                   type: string
                 binlogArchiveCronJob:
                   type: string
+                lastScheduledBackup:
+                  type: string
+                lastScheduledBackupTime:
+                  type: string
+                  format: date-time
+                backupRetentionDays:
+                  type: integer
+                  format: int32
                 conditions:
                   type: array
                   items:

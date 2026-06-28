@@ -160,6 +160,12 @@ func (r *MySQLReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return ctrl.Result{}, err
 	}
 
+	backupRequeue, err := r.reconcileScheduledBackups(ctx, mysql)
+	if err != nil {
+		logger.Error(err, "scheduled backup reconciliation failed")
+		// Continue; status update still valuable.
+	}
+
 	requeue, replicating, err := r.ensureReplication(ctx, mysql, rootSecret, rootKey, replSecret, replKey)
 	if err != nil {
 		logger.Error(err, "failed to configure replication")
@@ -175,6 +181,9 @@ func (r *MySQLReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 
 	if failoverRequeue || requeue {
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+	if backupRequeue > 0 {
+		return ctrl.Result{RequeueAfter: backupRequeue}, nil
 	}
 	// Periodically re-check replication + primary health when HA is enabled.
 	if mysql.Spec.DesiredReplicas() > 1 {
@@ -852,6 +861,9 @@ func (r *MySQLReconciler) updateStatus(ctx context.Context, mysql *mysqlv1alpha1
 	lastTo := mysql.Status.LastFailoverTo
 	binlogPrefix := mysql.Status.BinlogArchivePrefix
 	binlogCron := mysql.Status.BinlogArchiveCronJob
+	lastSchedBackup := mysql.Status.LastScheduledBackup
+	lastSchedBackupTime := mysql.Status.LastScheduledBackupTime
+	backupRetention := mysql.Status.BackupRetentionDays
 
 	mysql.Status.Phase = phase
 	mysql.Status.ReadyReplicas = sts.Status.ReadyReplicas
@@ -871,6 +883,12 @@ func (r *MySQLReconciler) updateStatus(ctx context.Context, mysql *mysqlv1alpha1
 	mysql.Status.LastFailoverTo = lastTo
 	mysql.Status.BinlogArchivePrefix = binlogPrefix
 	mysql.Status.BinlogArchiveCronJob = binlogCron
+	mysql.Status.LastScheduledBackup = lastSchedBackup
+	mysql.Status.LastScheduledBackupTime = lastSchedBackupTime
+	mysql.Status.BackupRetentionDays = backupRetention
+	if mysql.Spec.BackupScheduleEnabled() {
+		mysql.Status.BackupRetentionDays = mysql.Spec.BackupRetentionDays()
+	}
 	// Always reflect PITR archive identity when enabled (even if earlier status patch lagged).
 	if mysql.Spec.PITREnabled() {
 		mysql.Status.BinlogArchiveCronJob = binlogCronName(mysql)
