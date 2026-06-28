@@ -1,0 +1,114 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    name: Unit & envtest
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build
+        run: go build -o bin/manager cmd/main.go
+
+      - name: API unit tests
+        run: go test ./api/... -count=1
+
+      - name: Install setup-envtest
+        run: go install sigs.k8s.io/controller-runtime/tools/setup-envtest@release-0.19
+
+      - name: Controller envtest
+        run: |
+          export KUBEBUILDER_ASSETS="$(setup-envtest use 1.31.0 --bin-dir "${RUNNER_TEMP}/k8s" -p path)"
+          go test ./internal/controller/ -count=1 -timeout=10m
+
+  e2e-clone:
+    name: E2E MySQLClone (kind)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: v1.31.0
+
+      - name: Create kind cluster
+        uses: helm/kind-action@v1.10.0
+        with:
+          cluster_name: mysql-operator-ci
+          node_image: kindest/node:v1.31.0
+          wait: 120s
+
+      - name: Install CRDs
+        run: |
+          kubectl apply -f config/crd/mysql.asrk.dev_mysqls.yaml
+          kubectl apply -f config/crd/mysql.asrk.dev_mysqlbackups.yaml
+          kubectl apply -f config/crd/mysql.asrk.dev_mysqlrestores.yaml
+          kubectl apply -f config/crd/mysql.asrk.dev_mysqlclones.yaml
+          kubectl wait --for=condition=Established crd/mysqls.mysql.asrk.dev --timeout=60s
+          kubectl wait --for=condition=Established crd/mysqlclones.mysql.asrk.dev --timeout=60s
+
+      - name: E2E live clone (Logical + ClonePlugin)
+        run: |
+          go test ./test/e2e/ -tags=e2e -count=1 -timeout=30m -run 'TestMySQLCloneLive' -v
+
+  e2e-s3:
+    name: E2E S3 backup MinIO (kind)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: v1.31.0
+
+      - name: Create kind cluster
+        uses: helm/kind-action@v1.10.0
+        with:
+          cluster_name: mysql-operator-ci-s3
+          node_image: kindest/node:v1.31.0
+          wait: 120s
+
+      - name: Install CRDs
+        run: |
+          kubectl apply -f config/crd/mysql.asrk.dev_mysqls.yaml
+          kubectl apply -f config/crd/mysql.asrk.dev_mysqlbackups.yaml
+          kubectl wait --for=condition=Established crd/mysqls.mysql.asrk.dev --timeout=60s
+          kubectl wait --for=condition=Established crd/mysqlbackups.mysql.asrk.dev --timeout=60s
+
+      - name: E2E MinIO S3 backup
+        run: |
+          go test ./test/e2e/ -tags=e2e -count=1 -timeout=25m -run 'TestMySQLBackupS3MinIO' -v
