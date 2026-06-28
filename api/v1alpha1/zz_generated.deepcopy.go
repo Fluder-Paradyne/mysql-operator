@@ -463,3 +463,97 @@ func (in *RestoreToSpec) DeepCopy() *RestoreToSpec {
 	in.DeepCopyInto(out)
 	return out
 }
+
+func (in *MySQLClone) DeepCopyInto(out *MySQLClone) {
+	*out = *in
+	out.TypeMeta = in.TypeMeta
+	in.ObjectMeta.DeepCopyInto(&out.ObjectMeta)
+	out.Spec = in.Spec
+	in.Status.DeepCopyInto(&out.Status)
+}
+
+func (in *MySQLClone) DeepCopy() *MySQLClone {
+	if in == nil {
+		return nil
+	}
+	out := new(MySQLClone)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *MySQLClone) DeepCopyObject() runtime.Object {
+	if c := in.DeepCopy(); c != nil {
+		return c
+	}
+	return nil
+}
+
+func (in *MySQLCloneList) DeepCopyInto(out *MySQLCloneList) {
+	*out = *in
+	out.TypeMeta = in.TypeMeta
+	in.ListMeta.DeepCopyInto(&out.ListMeta)
+	if in.Items != nil {
+		in, out := &in.Items, &out.Items
+		*out = make([]MySQLClone, len(*in))
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
+	}
+}
+
+func (in *MySQLCloneList) DeepCopy() *MySQLCloneList {
+	if in == nil {
+		return nil
+	}
+	out := new(MySQLCloneList)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *MySQLCloneList) DeepCopyObject() runtime.Object {
+	if c := in.DeepCopy(); c != nil {
+		return c
+	}
+	return nil
+}
+
+func (in *MySQLCloneSpec) DeepCopyInto(out *MySQLCloneSpec) {
+	*out = *in
+}
+
+func (in *MySQLCloneSpec) DeepCopy() *MySQLCloneSpec {
+	if in == nil {
+		return nil
+	}
+	out := new(MySQLCloneSpec)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *MySQLCloneStatus) DeepCopyInto(out *MySQLCloneStatus) {
+	*out = *in
+	if in.StartTime != nil {
+		in, out := &in.StartTime, &out.StartTime
+		*out = (*in).DeepCopy()
+	}
+	if in.CompletionTime != nil {
+		in, out := &in.CompletionTime, &out.CompletionTime
+		*out = (*in).DeepCopy()
+	}
+	if in.Conditions != nil {
+		in, out := &in.Conditions, &out.Conditions
+		*out = make([]metav1.Condition, len(*in))
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
+	}
+}
+
+func (in *MySQLCloneStatus) DeepCopy() *MySQLCloneStatus {
+	if in == nil {
+		return nil
+	}
+	out := new(MySQLCloneStatus)
+	in.DeepCopyInto(out)
+	return out
+}

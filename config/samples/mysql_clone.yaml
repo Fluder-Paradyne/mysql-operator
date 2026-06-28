@@ -1,0 +1,22 @@
+# Clone live data from ha-mysql into a second instance (create target first).
+# WARNING: target is overwritten.
+apiVersion: mysql.asrk.dev/v1alpha1
+kind: MySQL
+metadata:
+  name: ha-mysql-clone-target
+  namespace: default
+spec:
+  replicas: 1
+  image: mysql:8.0
+  storageSize: 5Gi
+---
+apiVersion: mysql.asrk.dev/v1alpha1
+kind: MySQLClone
+metadata:
+  name: clone-ha-to-target
+  namespace: default
+spec:
+  sourceMySQLName: ha-mysql
+  targetMySQLName: ha-mysql-clone-target
+  # method: ClonePlugin   # default — MySQL 8 CLONE INSTANCE
+  # method: Logical       # mysqldump stream instead

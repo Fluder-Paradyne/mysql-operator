@@ -21,6 +21,7 @@ install:
 	kubectl apply -f config/crd/mysql.asrk.dev_mysqls.yaml
 	kubectl apply -f config/crd/mysql.asrk.dev_mysqlbackups.yaml
 	kubectl apply -f config/crd/mysql.asrk.dev_mysqlrestores.yaml
+	kubectl apply -f config/crd/mysql.asrk.dev_mysqlclones.yaml
 
 deploy: install
 	kubectl apply -f config/manager/namespace.yaml
