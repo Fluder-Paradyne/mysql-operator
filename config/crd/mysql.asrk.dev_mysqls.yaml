@@ -23,6 +23,9 @@ spec:
         - name: Ready
           type: integer
           jsonPath: .status.readyReplicas
+        - name: Primary
+          type: string
+          jsonPath: .status.primaryPod
         - name: Mode
           type: string
           jsonPath: .status.mode
@@ -84,6 +87,20 @@ spec:
                   type: integer
                   format: int32
                   default: 3306
+
+                failover:
+                  type: object
+                  description: Automatic primary promotion when the current primary is unhealthy (HA only)
+                  properties:
+                    enabled:
+                      type: boolean
+                      description: Defaults to true when omitted and replicas > 1
+                    unhealthySeconds:
+                      type: integer
+                      format: int32
+                      minimum: 5
+                      maximum: 600
+                      default: 30
                 resources:
                   type: object
                   properties:
@@ -125,6 +142,19 @@ spec:
                 replicating:
                   type: integer
                   format: int32
+
+                failoverInProgress:
+                  type: boolean
+                primaryUnhealthySince:
+                  type: string
+                  format: date-time
+                lastFailoverTime:
+                  type: string
+                  format: date-time
+                lastFailoverFrom:
+                  type: string
+                lastFailoverTo:
+                  type: string
                 rootSecretName:
                   type: string
                 replicationSecretName:

@@ -7,6 +7,29 @@ import (
 	runtime "k8s.io/apimachinery/pkg/runtime"
 )
 
+func (in *FailoverSpec) DeepCopyInto(out *FailoverSpec) {
+	*out = *in
+	if in.Enabled != nil {
+		in, out := &in.Enabled, &out.Enabled
+		*out = new(bool)
+		**out = **in
+	}
+	if in.UnhealthySeconds != nil {
+		in, out := &in.UnhealthySeconds, &out.UnhealthySeconds
+		*out = new(int32)
+		**out = **in
+	}
+}
+
+func (in *FailoverSpec) DeepCopy() *FailoverSpec {
+	if in == nil {
+		return nil
+	}
+	out := new(FailoverSpec)
+	in.DeepCopyInto(out)
+	return out
+}
+
 func (in *MySQL) DeepCopyInto(out *MySQL) {
 	*out = *in
 	out.TypeMeta = in.TypeMeta
@@ -83,6 +106,11 @@ func (in *MySQLSpec) DeepCopyInto(out *MySQLSpec) {
 		**out = **in
 	}
 	in.Resources.DeepCopyInto(&out.Resources)
+	if in.Failover != nil {
+		in, out := &in.Failover, &out.Failover
+		*out = new(FailoverSpec)
+		(*in).DeepCopyInto(*out)
+	}
 }
 
 func (in *MySQLSpec) DeepCopy() *MySQLSpec {
@@ -96,6 +124,14 @@ func (in *MySQLSpec) DeepCopy() *MySQLSpec {
 
 func (in *MySQLStatus) DeepCopyInto(out *MySQLStatus) {
 	*out = *in
+	if in.PrimaryUnhealthySince != nil {
+		in, out := &in.PrimaryUnhealthySince, &out.PrimaryUnhealthySince
+		*out = (*in).DeepCopy()
+	}
+	if in.LastFailoverTime != nil {
+		in, out := &in.LastFailoverTime, &out.LastFailoverTime
+		*out = (*in).DeepCopy()
+	}
 	if in.Conditions != nil {
 		in, out := &in.Conditions, &out.Conditions
 		*out = make([]metav1.Condition, len(*in))

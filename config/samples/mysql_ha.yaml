@@ -4,7 +4,7 @@ metadata:
   name: ha-mysql
   namespace: default
 spec:
-  # pod-0 = primary (writes); pod-1..N-1 = async GTID replicas
+  # pod-0 starts as primary; automatic failover may promote another pod.
   replicas: 3
   image: mysql:8.0
   storageSize: 5Gi
@@ -15,7 +15,11 @@ spec:
       memory: 256Mi
     limits:
       memory: 1Gi
+  # Automatic failover (default enabled when replicas > 1)
+  failover:
+    enabled: true
+    unhealthySeconds: 30
 # Clients:
-#   writes -> Service ha-mysql-primary (or ha-mysql)
+#   writes -> Service ha-mysql-primary (or ha-mysql) — follows status.primaryPod
 #   reads  -> Service ha-mysql-reads
-# Topology DNS: ha-mysql-0.ha-mysql-headless.default.svc.cluster.local
+# Topology DNS: <pod>.ha-mysql-headless.default.svc.cluster.local
