@@ -1,0 +1,16 @@
+apiVersion: mysql.asrk.dev/v1alpha1
+kind: MySQL
+metadata:
+  name: example-mysql
+  namespace: default
+spec:
+  replicas: 1
+  image: mysql:8.0
+  storageSize: 5Gi
+  database: app
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 1Gi

@@ -1,0 +1,21 @@
+apiVersion: mysql.asrk.dev/v1alpha1
+kind: MySQL
+metadata:
+  name: ha-mysql
+  namespace: default
+spec:
+  # pod-0 = primary (writes); pod-1..N-1 = async GTID replicas
+  replicas: 3
+  image: mysql:8.0
+  storageSize: 5Gi
+  database: app
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 1Gi
+# Clients:
+#   writes -> Service ha-mysql-primary (or ha-mysql)
+#   reads  -> Service ha-mysql-reads
+# Topology DNS: ha-mysql-0.ha-mysql-headless.default.svc.cluster.local

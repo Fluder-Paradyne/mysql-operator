@@ -1,0 +1,158 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: mysqls.mysql.asrk.dev
+spec:
+  group: mysql.asrk.dev
+  names:
+    kind: MySQL
+    listKind: MySQLList
+    plural: mysqls
+    singular: mysql
+    shortNames:
+      - my
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      additionalPrinterColumns:
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Ready
+          type: integer
+          jsonPath: .status.readyReplicas
+        - name: Mode
+          type: string
+          jsonPath: .status.mode
+        - name: Replicating
+          type: integer
+          jsonPath: .status.replicating
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            apiVersion:
+              type: string
+            kind:
+              type: string
+            metadata:
+              type: object
+            spec:
+              type: object
+              properties:
+                replicas:
+                  type: integer
+                  format: int32
+                  minimum: 1
+                  maximum: 5
+                  default: 1
+                  description: "1 = standalone; 2+ = primary (pod-0) + GTID replicas"
+                image:
+                  type: string
+                  default: mysql:8.0
+                storageSize:
+                  type: string
+                  default: 10Gi
+                storageClassName:
+                  type: string
+                rootPasswordSecretRef:
+                  type: object
+                  required: [name]
+                  properties:
+                    name:
+                      type: string
+                    key:
+                      type: string
+                      default: password
+                replicationPasswordSecretRef:
+                  type: object
+                  required: [name]
+                  properties:
+                    name:
+                      type: string
+                    key:
+                      type: string
+                      default: password
+                database:
+                  type: string
+                port:
+                  type: integer
+                  format: int32
+                  default: 3306
+                resources:
+                  type: object
+                  properties:
+                    limits:
+                      type: object
+                      additionalProperties:
+                        anyOf:
+                          - type: integer
+                          - type: string
+                        x-kubernetes-int-or-string: true
+                    requests:
+                      type: object
+                      additionalProperties:
+                        anyOf:
+                          - type: integer
+                          - type: string
+                        x-kubernetes-int-or-string: true
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                readyReplicas:
+                  type: integer
+                  format: int32
+                desiredReplicas:
+                  type: integer
+                  format: int32
+                mode:
+                  type: string
+                primaryPod:
+                  type: string
+                primaryService:
+                  type: string
+                readsService:
+                  type: string
+                headlessService:
+                  type: string
+                replicating:
+                  type: integer
+                  format: int32
+                rootSecretName:
+                  type: string
+                replicationSecretName:
+                  type: string
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    required:
+                      - lastTransitionTime
+                      - message
+                      - reason
+                      - status
+                      - type
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                      observedGeneration:
+                        type: integer
+                        format: int64
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      reason:
+                        type: string
+                      message:
+                        type: string
+      subresources:
+        status: {}
