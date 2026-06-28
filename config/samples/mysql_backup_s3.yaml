@@ -1,0 +1,23 @@
+# Example: dump + upload to S3 (or MinIO with endpoint + forcePathStyle).
+# Create credentials first:
+#   kubectl create secret generic aws-backup-creds \
+#     --from-literal=AWS_ACCESS_KEY_ID=... \
+#     --from-literal=AWS_SECRET_ACCESS_KEY=...
+apiVersion: mysql.asrk.dev/v1alpha1
+kind: MySQLBackup
+metadata:
+  name: ha-mysql-backup-s3
+  namespace: default
+spec:
+  mysqlName: ha-mysql
+  storageSize: 5Gi
+  # Optional: only stage in emptyDir (no PVC), S3 is the sole retention
+  # s3.skipPVC: true
+  s3:
+    bucket: my-mysql-backups
+    # prefix: mysql-backups/ha-mysql/manual   # default: mysql-backups/<mysqlName>/<backupName>
+    region: us-east-1
+    # endpoint: https://minio.example.com
+    # forcePathStyle: true
+    credentialsSecretRef:
+      name: aws-backup-creds
