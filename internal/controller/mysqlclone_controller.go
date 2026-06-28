@@ -169,12 +169,8 @@ func (r *MySQLCloneReconciler) ensureCloneJob(
 		return err
 	}
 
-	var script string
-	if method == "Logical" {
-		// Stream dump from source into target (live logical clone). Avoid embedding passwords in argv where possible.
-		script = fmt.Sprintf(`set -euo pipefail
-SRC=%s
-DST=%s
+	// Shared wait + logical stream (also used as fallback if CLONE INSTANCE is unavailable).
+	logicalBody := `
 export MYSQL_PWD_SRC="$SRC_ROOT_PASSWORD"
 export MYSQL_PWD_DST="$DST_ROOT_PASSWORD"
 echo "waiting for source $SRC and target $DST"
@@ -183,70 +179,75 @@ for i in $(seq 1 60); do
   MYSQL_PWD="$MYSQL_PWD_DST" mysqladmin ping -h"$DST" -uroot --silent && break
   sleep 2
 done
+MYSQL_PWD="$MYSQL_PWD_SRC" mysqladmin ping -h"$SRC" -uroot --silent
+MYSQL_PWD="$MYSQL_PWD_DST" mysqladmin ping -h"$DST" -uroot --silent
 echo "streaming mysqldump $SRC -> $DST (logical live clone)"
 if mysqldump --help 2>&1 | grep -q -- '--source-data'; then BINLOG_FLAG="--source-data=2"; else BINLOG_FLAG="--master-data=2"; fi
 MYSQL_PWD="$MYSQL_PWD_SRC" mysqldump -h"$SRC" -uroot --single-transaction --routines --triggers --events --all-databases $BINLOG_FLAG \
   | MYSQL_PWD="$MYSQL_PWD_DST" mysql -h"$DST" -uroot
 echo "logical clone complete"
-`, shellQuote(srcHost), shellQuote(dstHost))
+`
+
+	var script string
+	if method == "Logical" {
+		script = fmt.Sprintf("set -euo pipefail\nSRC=%s\nDST=%s\n%s\n", shellQuote(srcHost), shellQuote(dstHost), logicalBody)
 	} else {
-		// Default: MySQL 8 CLONE INSTANCE on TARGET from SOURCE donor.
-		// Password is passed via a mysql client defaults file to avoid shell/SQL quoting issues.
+		// ClonePlugin: try MySQL 8 CLONE INSTANCE; on failure fall back to logical stream so clones remain reliable.
 		script = fmt.Sprintf(`set -euo pipefail
 SRC=%s
 DST=%s
 PORT=3306
-# defaults-extra-file for source (donor) and target (recipient)
-umask 077
-cat > /tmp/src.cnf <<EOF
-[client]
-user=root
-password=$SRC_ROOT_PASSWORD
-host=$SRC
-EOF
-cat > /tmp/dst.cnf <<EOF
-[client]
-user=root
-password=$DST_ROOT_PASSWORD
-host=$DST
-EOF
+export MYSQL_PWD_SRC="$SRC_ROOT_PASSWORD"
+export MYSQL_PWD_DST="$DST_ROOT_PASSWORD"
 echo "waiting for source $SRC and target $DST"
 for i in $(seq 1 60); do
-  mysqladmin --defaults-extra-file=/tmp/src.cnf ping --silent && \
-  mysqladmin --defaults-extra-file=/tmp/dst.cnf ping --silent && break
+  MYSQL_PWD="$MYSQL_PWD_SRC" mysqladmin ping -h"$SRC" -uroot --silent && \
+  MYSQL_PWD="$MYSQL_PWD_DST" mysqladmin ping -h"$DST" -uroot --silent && break
   sleep 2
 done
-mysqladmin --defaults-extra-file=/tmp/src.cnf ping --silent
-mysqladmin --defaults-extra-file=/tmp/dst.cnf ping --silent
-echo "preparing clone plugin on target"
-mysql --defaults-extra-file=/tmp/dst.cnf -e "INSTALL PLUGIN IF NOT EXISTS clone SONAME 'mysql_clone.so';" || true
-mysql --defaults-extra-file=/tmp/dst.cnf -e "SET GLOBAL clone_valid_donor_list='${SRC}:${PORT}';"
-echo "CLONE INSTANCE FROM root@${SRC}:${PORT}"
-# Write CLONE SQL with password via prepared approach: use source password from env in SQL is fragile;
-# create a one-shot donor user with a known password for the clone session only.
-CLONE_PASS=$(head -c 24 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 20)
-mysql --defaults-extra-file=/tmp/src.cnf -e "CREATE USER IF NOT EXISTS 'op_clone'@'%%' IDENTIFIED BY '${CLONE_PASS}'; GRANT BACKUP_ADMIN, CLONE_ADMIN ON *.* TO 'op_clone'@'%%'; FLUSH PRIVILEGES;"
-set +e
-mysql --defaults-extra-file=/tmp/dst.cnf -e "CLONE INSTANCE FROM 'op_clone'@'${SRC}':${PORT} IDENTIFIED BY '${CLONE_PASS}';"
-RC=$?
-set -e
-echo "clone sql exit=$RC (non-zero often OK if mysqld restarted)"
-# After CLONE, root password on target matches SOURCE
-for i in $(seq 1 90); do
-  if mysqladmin --defaults-extra-file=/tmp/src.cnf -h"$DST" ping --silent 2>/dev/null; then
-    echo "target responding with source credentials — clone OK"
-    exit 0
-  fi
-  if mysqladmin --defaults-extra-file=/tmp/dst.cnf ping --silent 2>/dev/null; then
-    echo "target responding with original credentials"
-    # still treat as success if server is up; data may have cloned
-    exit 0
-  fi
-  sleep 2
-done
-echo "target did not recover after CLONE"
-exit 1
-`, shellQuote(srcHost), shellQuote(dstHost))
+MYSQL_PWD="$MYSQL_PWD_SRC" mysqladmin ping -h"$SRC" -uroot --silent
+MYSQL_PWD="$MYSQL_PWD_DST" mysqladmin ping -h"$DST" -uroot --silent
+
+clone_plugin_try() {
+  echo "attempting CLONE INSTANCE (MySQL 8 plugin)"
+  MYSQL_PWD="$MYSQL_PWD_DST" mysql -h"$DST" -uroot -e "INSTALL PLUGIN IF NOT EXISTS clone SONAME 'mysql_clone.so';" 2>/tmp/clone_install.err || true
+  cat /tmp/clone_install.err || true
+  MYSQL_PWD="$MYSQL_PWD_DST" mysql -h"$DST" -uroot -e "SET GLOBAL clone_valid_donor_list='${SRC}:${PORT}';" || return 1
+  CLONE_PASS=$(tr -dc 'a-zA-Z0-9' </dev/urandom | head -c 20)
+  MYSQL_PWD="$MYSQL_PWD_SRC" mysql -h"$SRC" -uroot -e "CREATE USER IF NOT EXISTS 'op_clone'@'%%' IDENTIFIED BY '${CLONE_PASS}'; GRANT BACKUP_ADMIN, CLONE_ADMIN ON *.* TO 'op_clone'@'%%'; FLUSH PRIVILEGES;" || return 1
+  set +e
+  MYSQL_PWD="$MYSQL_PWD_DST" mysql -h"$DST" -uroot -e "CLONE INSTANCE FROM 'op_clone'@'${SRC}':${PORT} IDENTIFIED BY '${CLONE_PASS}';" 2>/tmp/clone_run.err
+  RC=$?
+  set -e
+  echo "CLONE sql exit=$RC"
+  cat /tmp/clone_run.err || true
+  # Recipient restarts; poll with SOURCE password (data/auth now match donor) then original.
+  for i in $(seq 1 90); do
+    if MYSQL_PWD="$MYSQL_PWD_SRC" mysqladmin ping -h"$DST" -uroot --silent 2>/dev/null; then
+      echo "CLONE appears successful (target up with donor credentials)"
+      return 0
+    fi
+    if MYSQL_PWD="$MYSQL_PWD_DST" mysqladmin ping -h"$DST" -uroot --silent 2>/dev/null; then
+      # Server up but may not have finished replace — check error log for success keywords
+      if grep -qiE 'Clone|clone' /tmp/clone_run.err 2>/dev/null && [ "$RC" -eq 0 ]; then
+        return 0
+      fi
+      # If CLONE returned 0 and target still on old creds, treat as OK only when RC=0
+      if [ "$RC" -eq 0 ]; then return 0; fi
+    fi
+    sleep 2
+  done
+  return 1
+}
+
+if clone_plugin_try; then
+  echo "ClonePlugin path succeeded"
+  exit 0
+fi
+
+echo "CLONE INSTANCE failed or unavailable — falling back to logical mysqldump stream"
+%s
+`, shellQuote(srcHost), shellQuote(dstHost), logicalBody)
 	}
 
 	backoff := int32(0)

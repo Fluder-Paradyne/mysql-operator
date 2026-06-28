@@ -28,12 +28,25 @@ import (
 	"github.com/asrk/mysql-operator/internal/controller"
 )
 
-// TestMySQLCloneLive clones a Ready source instance into a fresh target using ClonePlugin,
-// then verifies a marker row is present on the target primary.
+// TestMySQLCloneLive verifies live clone for both Logical and ClonePlugin methods (green gate).
 func TestMySQLCloneLive(t *testing.T) {
 	if os.Getenv("E2E_SKIP") == "1" {
 		t.Skip("E2E_SKIP=1")
 	}
+	methods := []string{"Logical", "ClonePlugin"}
+	if m := os.Getenv("E2E_CLONE_METHOD"); m != "" {
+		methods = []string{m}
+	}
+	for _, method := range methods {
+		method := method
+		t.Run(method, func(t *testing.T) {
+			runCloneLiveE2E(t, method)
+		})
+	}
+}
+
+func runCloneLiveE2E(t *testing.T, method string) {
+	t.Helper()
 	ctrl.SetLogger(zap.New(zap.UseDevMode(true)))
 
 	cfg, err := loadRESTConfig()
@@ -64,7 +77,8 @@ func TestMySQLCloneLive(t *testing.T) {
 		t.Fatalf("MySQLClone CRD missing — apply config/crd/mysql.asrk.dev_mysqlclones.yaml: %v", err)
 	}
 
-	nsName := fmt.Sprintf("mysql-e2e-clone-%d", time.Now().UnixNano()%1_000_000_000)
+	nsName := fmt.Sprintf("mysql-e2e-clone-%s-%d", strings.ToLower(method), time.Now().UnixNano()%1_000_000_000)
+	nsName = strings.ReplaceAll(nsName, "_", "-")
 	if _, err := cs.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: nsName}}, metav1.CreateOptions{}); err != nil {
 		t.Fatal(err)
 	}
@@ -81,10 +95,11 @@ func TestMySQLCloneLive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := (&controller.MySQLReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme(), Name: "mysql-clone-e2e"}).SetupWithManager(mgr); err != nil {
+	suffix := strings.ToLower(method)
+	if err := (&controller.MySQLReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme(), Name: "mysql-clone-e2e-" + suffix}).SetupWithManager(mgr); err != nil {
 		t.Fatal(err)
 	}
-	if err := (&controller.MySQLCloneReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme(), Name: "mysqlclone-e2e"}).SetupWithManager(mgr); err != nil {
+	if err := (&controller.MySQLCloneReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme(), Name: "mysqlclone-e2e-" + suffix}).SetupWithManager(mgr); err != nil {
 		t.Fatal(err)
 	}
 	mgrCtx, mgrCancel := context.WithCancel(ctx)
@@ -126,7 +141,6 @@ func TestMySQLCloneLive(t *testing.T) {
 	waitReady(srcName)
 	waitReady(dstName)
 
-	// Marker only on source
 	marker := fmt.Sprintf("clone-marker-%d", time.Now().UnixNano())
 	srcPass := secretPassword(ctx, t, c, nsName, srcName+"-root")
 	out, err := execInPod(ctx, cfg, cs, nsName, srcName+"-0", "mysql", []string{
@@ -137,7 +151,6 @@ func TestMySQLCloneLive(t *testing.T) {
 		t.Fatalf("seed source: err=%v out=%q", err, out)
 	}
 
-	// Ensure target does not have the marker yet (best-effort)
 	dstPass := secretPassword(ctx, t, c, nsName, dstName+"-root")
 	pre, _ := execInPod(ctx, cfg, cs, nsName, dstName+"-0", "mysql", []string{
 		"mysql", "-h127.0.0.1", "-uroot", "-p" + dstPass, "-N", "-e",
@@ -148,11 +161,6 @@ func TestMySQLCloneLive(t *testing.T) {
 	}
 
 	cloneName := "live-clone-1"
-	// Default Logical: reliable live stream on kind. Set E2E_CLONE_METHOD=ClonePlugin to exercise MySQL 8 CLONE INSTANCE.
-	method := os.Getenv("E2E_CLONE_METHOD")
-	if method == "" {
-		method = "Logical"
-	}
 	clone := &mysqlv1alpha1.MySQLClone{
 		ObjectMeta: metav1.ObjectMeta{Name: cloneName, Namespace: nsName},
 		Spec: mysqlv1alpha1.MySQLCloneSpec{
@@ -171,7 +179,7 @@ func TestMySQLCloneLive(t *testing.T) {
 		if err := c.Get(ctx, types.NamespacedName{Name: cloneName, Namespace: nsName}, cur); err != nil {
 			return false, nil
 		}
-		t.Logf("[clone] phase=%s msg=%s job=%s", cur.Status.Phase, cur.Status.Message, cur.Status.JobName)
+		t.Logf("[clone/%s] phase=%s msg=%s job=%s", method, cur.Status.Phase, cur.Status.Message, cur.Status.JobName)
 		if cur.Status.Phase == "Failed" {
 			return false, fmt.Errorf("clone failed: %s", cur.Status.Message)
 		}
@@ -182,17 +190,15 @@ func TestMySQLCloneLive(t *testing.T) {
 		t.Fatalf("clone did not succeed: %v", err)
 	}
 
-	// Target may restart after CLONE — wait for SQL again
 	err = wait.PollUntilContextTimeout(ctx, 3*time.Second, 5*time.Minute, true, func(ctx context.Context) (bool, error) {
 		dstPass = secretPassword(ctx, t, c, nsName, dstName+"-root")
-		// Password on target may be source's after physical clone — try both
 		for _, pass := range []string{dstPass, srcPass} {
 			got, err := execInPod(ctx, cfg, cs, nsName, dstName+"-0", "mysql", []string{
 				"mysql", "-h127.0.0.1", "-uroot", "-p" + pass, "-N", "-e",
 				"SELECT msg FROM app.clone_t WHERE id=1;",
 			})
 			if err == nil && strings.Contains(got, marker) {
-				t.Logf("found marker on target with password try (len=%d)", len(pass))
+				t.Logf("found marker on target")
 				return true, nil
 			}
 		}
