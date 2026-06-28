@@ -70,3 +70,7 @@ test-e2e-kind:
 
 # Default: unit + envtest integration (no Docker/kind required after first envtest download).
 test: test-unit test-integration
+
+# S3 backup e2e against in-cluster MinIO (kind). Requires CRDs installed.
+test-e2e-s3: install
+	go test ./test/e2e/ -tags=e2e -count=1 -timeout=20m -run 'TestMySQLBackupS3MinIO' -v
