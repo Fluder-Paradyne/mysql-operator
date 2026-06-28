@@ -4,13 +4,13 @@ metadata:
   name: mysql-operator-manager-role
 rules:
   - apiGroups: ["mysql.asrk.dev"]
-    resources: ["mysqls", "mysqlbackups", "mysqlrestores"]
+    resources: ["mysqls", "mysqlbackups", "mysqlrestores", "mysqlclones"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["mysql.asrk.dev"]
-    resources: ["mysqls/status", "mysqlbackups/status", "mysqlrestores/status"]
+    resources: ["mysqls/status", "mysqlbackups/status", "mysqlrestores/status", "mysqlclones/status"]
     verbs: ["get", "update", "patch"]
   - apiGroups: ["mysql.asrk.dev"]
-    resources: ["mysqls/finalizers", "mysqlbackups/finalizers", "mysqlrestores/finalizers"]
+    resources: ["mysqls/finalizers", "mysqlbackups/finalizers", "mysqlrestores/finalizers", "mysqlclones/finalizers"]
     verbs: ["update"]
   - apiGroups: ["apps"]
     resources: ["statefulsets"]

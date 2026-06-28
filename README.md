@@ -231,6 +231,22 @@ With default settings the dump is kept on the backup **PVC and** in S3.
 
  Dumps use `--single-transaction` and binlog coordinates (`--source-data` / `--master-data`) when supported.
 
+## Live cluster clone (`MySQLClone`)
+
+Clone **live** data from one operator-managed MySQL into another (same namespace).
+
+- **Default `method: ClonePlugin`** — MySQL 8 `CLONE INSTANCE` on the **target primary**, donor = **source primary Service** (fast, physical-ish online clone).
+- **`method: Logical`** — `mysqldump | mysql` stream (works more broadly, slower).
+
+```bash
+# target instance must exist and be Ready (can be empty/new)
+kubectl apply -f config/samples/mysql_clone.yaml
+kubectl get mysqlclone
+# Phase=Succeeded — target holds a copy of source data
+```
+
+**Destructive** to the target. For HA targets, only the primary is cloned; replicas should catch up via the normal replication reconcile (or be resynced).
+
 ## Point-in-time recovery (PITR)
 
 1. Enable **`spec.pitr`** on `MySQL` (binlog CronJob → S3).
