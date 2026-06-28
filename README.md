@@ -180,6 +180,34 @@ spec:
       memory: 256Mi
 ```
 
+
+## Backups (logical dump)
+
+Create a **`MySQLBackup`** CR to run an on-demand **mysqldump** Job into a dedicated PVC.
+
+```bash
+# MySQL instance must already be Running
+kubectl apply -f config/samples/mysql_backup.yaml
+kubectl get mysqlbackup
+# PHASE=Succeeded, PVC=<backup-name>-data, file /backup/dump.sql.gz
+
+# Inspect / restore later (example):
+kubectl run -it --rm restore-shell --image=mysql:8.0 --restart=Never \
+  --overrides='{"spec":{"containers":[{"name":"shell","image":"mysql:8.0","command":["sleep","3600"],"volumeMounts":[{"name":"b","mountPath":"/backup"}]}],"volumes":[{"name":"b","persistentVolumeClaim":{"claimName":"ha-mysql-backup-1-data"}}]}}' \
+  -- bash
+# inside: gunzip -c /backup/dump.sql.gz | mysql -h ha-mysql-primary -uroot -p...
+```
+
+| Field | Meaning |
+|-------|---------|
+| `spec.mysqlName` | Target `MySQL` CR (same namespace) |
+| `spec.storageSize` | PVC size for the dump (default `5Gi`) |
+| `spec.databases` | Optional list; empty = `--all-databases` |
+| `spec.image` | Job image (defaults to the MySQL CR image) |
+| `status.pvcName` / `fileName` | Where the gzipped dump lives |
+
+The Job connects to the instance **primary Service** using the root Secret. Dumps use `--single-transaction` and binlog coordinates (`--source-data` / `--master-data`) when supported.
+
 ## Limitations (current HA model)
 
 - **Async primary/replica only** — not MySQL Group Replication / InnoDB Cluster (no quorum / fencing guarantees)

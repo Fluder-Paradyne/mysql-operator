@@ -19,6 +19,7 @@ docker-build:
 
 install:
 	kubectl apply -f config/crd/mysql.asrk.dev_mysqls.yaml
+	kubectl apply -f config/crd/mysql.asrk.dev_mysqlbackups.yaml
 
 deploy: install
 	kubectl apply -f config/manager/namespace.yaml
@@ -34,6 +35,7 @@ undeploy:
 	-kubectl delete -f config/rbac/role.yaml --ignore-not-found
 	-kubectl delete -f config/rbac/service_account.yaml --ignore-not-found
 	-kubectl delete -f config/manager/namespace.yaml --ignore-not-found
+	-kubectl delete -f config/crd/mysql.asrk.dev_mysqlbackups.yaml --ignore-not-found
 	-kubectl delete -f config/crd/mysql.asrk.dev_mysqls.yaml --ignore-not-found
 
 sample:

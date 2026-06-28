@@ -162,3 +162,112 @@ func (in *SecretKeySelector) DeepCopy() *SecretKeySelector {
 	in.DeepCopyInto(out)
 	return out
 }
+
+func (in *MySQLBackup) DeepCopyInto(out *MySQLBackup) {
+	*out = *in
+	out.TypeMeta = in.TypeMeta
+	in.ObjectMeta.DeepCopyInto(&out.ObjectMeta)
+	in.Spec.DeepCopyInto(&out.Spec)
+	in.Status.DeepCopyInto(&out.Status)
+}
+
+func (in *MySQLBackup) DeepCopy() *MySQLBackup {
+	if in == nil {
+		return nil
+	}
+	out := new(MySQLBackup)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *MySQLBackup) DeepCopyObject() runtime.Object {
+	if c := in.DeepCopy(); c != nil {
+		return c
+	}
+	return nil
+}
+
+func (in *MySQLBackupList) DeepCopyInto(out *MySQLBackupList) {
+	*out = *in
+	out.TypeMeta = in.TypeMeta
+	in.ListMeta.DeepCopyInto(&out.ListMeta)
+	if in.Items != nil {
+		in, out := &in.Items, &out.Items
+		*out = make([]MySQLBackup, len(*in))
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
+	}
+}
+
+func (in *MySQLBackupList) DeepCopy() *MySQLBackupList {
+	if in == nil {
+		return nil
+	}
+	out := new(MySQLBackupList)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *MySQLBackupList) DeepCopyObject() runtime.Object {
+	if c := in.DeepCopy(); c != nil {
+		return c
+	}
+	return nil
+}
+
+func (in *MySQLBackupSpec) DeepCopyInto(out *MySQLBackupSpec) {
+	*out = *in
+	if in.StorageClassName != nil {
+		in, out := &in.StorageClassName, &out.StorageClassName
+		*out = new(string)
+		**out = **in
+	}
+	if in.Databases != nil {
+		in, out := &in.Databases, &out.Databases
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
+	if in.TTLSecondsAfterFinished != nil {
+		in, out := &in.TTLSecondsAfterFinished, &out.TTLSecondsAfterFinished
+		*out = new(int32)
+		**out = **in
+	}
+}
+
+func (in *MySQLBackupSpec) DeepCopy() *MySQLBackupSpec {
+	if in == nil {
+		return nil
+	}
+	out := new(MySQLBackupSpec)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *MySQLBackupStatus) DeepCopyInto(out *MySQLBackupStatus) {
+	*out = *in
+	if in.StartTime != nil {
+		in, out := &in.StartTime, &out.StartTime
+		*out = (*in).DeepCopy()
+	}
+	if in.CompletionTime != nil {
+		in, out := &in.CompletionTime, &out.CompletionTime
+		*out = (*in).DeepCopy()
+	}
+	if in.Conditions != nil {
+		in, out := &in.Conditions, &out.Conditions
+		*out = make([]metav1.Condition, len(*in))
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
+	}
+}
+
+func (in *MySQLBackupStatus) DeepCopy() *MySQLBackupStatus {
+	if in == nil {
+		return nil
+	}
+	out := new(MySQLBackupStatus)
+	in.DeepCopyInto(out)
+	return out
+}

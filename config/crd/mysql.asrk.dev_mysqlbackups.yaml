@@ -1,0 +1,109 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: mysqlbackups.mysql.asrk.dev
+spec:
+  group: mysql.asrk.dev
+  names:
+    kind: MySQLBackup
+    listKind: MySQLBackupList
+    plural: mysqlbackups
+    singular: mysqlbackup
+    shortNames:
+      - myb
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      additionalPrinterColumns:
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: MySQL
+          type: string
+          jsonPath: .spec.mysqlName
+        - name: PVC
+          type: string
+          jsonPath: .status.pvcName
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            apiVersion:
+              type: string
+            kind:
+              type: string
+            metadata:
+              type: object
+            spec:
+              type: object
+              required:
+                - mysqlName
+              properties:
+                mysqlName:
+                  type: string
+                  minLength: 1
+                storageSize:
+                  type: string
+                  default: 5Gi
+                storageClassName:
+                  type: string
+                image:
+                  type: string
+                databases:
+                  type: array
+                  items:
+                    type: string
+                ttlSecondsAfterFinished:
+                  type: integer
+                  format: int32
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                jobName:
+                  type: string
+                pvcName:
+                  type: string
+                fileName:
+                  type: string
+                message:
+                  type: string
+                startTime:
+                  type: string
+                  format: date-time
+                completionTime:
+                  type: string
+                  format: date-time
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    required:
+                      - lastTransitionTime
+                      - message
+                      - reason
+                      - status
+                      - type
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                      observedGeneration:
+                        type: integer
+                        format: int64
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      reason:
+                        type: string
+                      message:
+                        type: string
+      subresources:
+        status: {}

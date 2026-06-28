@@ -1,0 +1,14 @@
+# Prerequisite: a MySQL CR named ha-mysql (or change mysqlName) is Running.
+apiVersion: mysql.asrk.dev/v1alpha1
+kind: MySQLBackup
+metadata:
+  name: ha-mysql-backup-1
+  namespace: default
+spec:
+  mysqlName: ha-mysql
+  storageSize: 5Gi
+  # optional: only these DBs (default = all)
+  # databases:
+  #   - app
+  # optional: Job TTL after success/failure
+  # ttlSecondsAfterFinished: 86400
