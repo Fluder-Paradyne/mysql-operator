@@ -112,3 +112,41 @@ jobs:
       - name: E2E MinIO S3 backup
         run: |
           go test ./test/e2e/ -tags=e2e -count=1 -timeout=25m -run 'TestMySQLBackupS3MinIO' -v
+
+  e2e-pitr:
+    name: E2E PITR MinIO (kind)
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: v1.31.0
+
+      - name: Create kind cluster
+        uses: helm/kind-action@v1.10.0
+        with:
+          cluster_name: mysql-operator-ci-pitr
+          node_image: kindest/node:v1.31.0
+          wait: 120s
+
+      - name: Install CRDs
+        run: |
+          kubectl apply -f config/crd/mysql.asrk.dev_mysqls.yaml
+          kubectl apply -f config/crd/mysql.asrk.dev_mysqlbackups.yaml
+          kubectl apply -f config/crd/mysql.asrk.dev_mysqlrestores.yaml
+          kubectl wait --for=condition=Established crd/mysqls.mysql.asrk.dev --timeout=60s
+          kubectl wait --for=condition=Established crd/mysqlbackups.mysql.asrk.dev --timeout=60s
+          kubectl wait --for=condition=Established crd/mysqlrestores.mysql.asrk.dev --timeout=60s
+
+      - name: E2E PITR (backup + binlog archive + restore)
+        run: |
+          go test ./test/e2e/ -tags=e2e -count=1 -timeout=30m -run 'TestMySQLPITRMinIO' -v
+

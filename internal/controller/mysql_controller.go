@@ -482,6 +482,42 @@ func (r *MySQLReconciler) ensureStatefulSet(ctx context.Context, mysql *mysqlv1a
 	}
 
 	scriptMode := int32(0755)
+	containers := []corev1.Container{
+		{
+			Name:    "mysql",
+			Image:   image,
+			Command: []string{"/bin/bash", scriptsMount + "/entrypoint.sh"},
+			Ports: []corev1.ContainerPort{{
+				Name: mysqlPortName, ContainerPort: port, Protocol: corev1.ProtocolTCP,
+			}},
+			Env:       env,
+			Resources: mysql.Spec.Resources,
+			VolumeMounts: []corev1.VolumeMount{
+				{Name: dataVolumeName, MountPath: dataMountPath},
+				{Name: scriptsVolume, MountPath: scriptsMount, ReadOnly: true},
+			},
+			ReadinessProbe: &corev1.Probe{
+				ProbeHandler: corev1.ProbeHandler{
+					TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromString(mysqlPortName)},
+				},
+				InitialDelaySeconds: 20,
+				PeriodSeconds:       5,
+				TimeoutSeconds:      3,
+			},
+			LivenessProbe: &corev1.Probe{
+				ProbeHandler: corev1.ProbeHandler{
+					TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromString(mysqlPortName)},
+				},
+				InitialDelaySeconds: 60,
+				PeriodSeconds:       10,
+				TimeoutSeconds:      3,
+			},
+		},
+	}
+	// PITR: ship on-disk mysql-bin.* to S3 from a sidecar sharing the datadir (mysql:8.0 has no mysqlbinlog).
+	if sc := pitrBinlogSidecar(mysql); sc != nil {
+		containers = append(containers, *sc)
+	}
 	desired := &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      stsName,
@@ -505,38 +541,7 @@ func (r *MySQLReconciler) ensureStatefulSet(ctx context.Context, mysql *mysqlv1a
 				Spec: corev1.PodSpec{
 					// Role labels are set by the controller after pods exist; start without role so
 					// primary service does not select unready pods incorrectly for too long.
-					Containers: []corev1.Container{
-						{
-							Name:    "mysql",
-							Image:   image,
-							Command: []string{"/bin/bash", scriptsMount + "/entrypoint.sh"},
-							Ports: []corev1.ContainerPort{{
-								Name: mysqlPortName, ContainerPort: port, Protocol: corev1.ProtocolTCP,
-							}},
-							Env:       env,
-							Resources: mysql.Spec.Resources,
-							VolumeMounts: []corev1.VolumeMount{
-								{Name: dataVolumeName, MountPath: dataMountPath},
-								{Name: scriptsVolume, MountPath: scriptsMount, ReadOnly: true},
-							},
-							ReadinessProbe: &corev1.Probe{
-								ProbeHandler: corev1.ProbeHandler{
-									TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromString(mysqlPortName)},
-								},
-								InitialDelaySeconds: 20,
-								PeriodSeconds:       5,
-								TimeoutSeconds:      3,
-							},
-							LivenessProbe: &corev1.Probe{
-								ProbeHandler: corev1.ProbeHandler{
-									TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromString(mysqlPortName)},
-								},
-								InitialDelaySeconds: 60,
-								PeriodSeconds:       10,
-								TimeoutSeconds:      3,
-							},
-						},
-					},
+					Containers: containers,
 					Volumes: []corev1.Volume{
 						{
 							Name: scriptsVolume,
@@ -866,6 +871,17 @@ func (r *MySQLReconciler) updateStatus(ctx context.Context, mysql *mysqlv1alpha1
 	mysql.Status.LastFailoverTo = lastTo
 	mysql.Status.BinlogArchivePrefix = binlogPrefix
 	mysql.Status.BinlogArchiveCronJob = binlogCron
+	// Always reflect PITR archive identity when enabled (even if earlier status patch lagged).
+	if mysql.Spec.PITREnabled() {
+		mysql.Status.BinlogArchiveCronJob = binlogCronName(mysql)
+		if mysql.Status.BinlogArchivePrefix == "" && mysql.Spec.PITR != nil && mysql.Spec.PITR.BinlogArchive != nil {
+			p := mysql.Spec.PITR.BinlogArchive.S3.Prefix
+			if p == "" {
+				p = "mysql-binlogs/" + mysql.Name
+			}
+			mysql.Status.BinlogArchivePrefix = strings.Trim(p, "/")
+		}
+	}
 
 	primaryReady := desired == 1 || r.podReady(ctx, mysql.Namespace, primary)
 	ready := sts.Status.ReadyReplicas >= 1 && primaryReady && (desired == 1 || replicating >= desired-1) && !failoverInProgress
