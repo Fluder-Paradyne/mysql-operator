@@ -75,3 +75,8 @@ test: test-unit test-integration
 # S3 backup e2e against in-cluster MinIO (kind). Requires CRDs installed.
 test-e2e-s3: install
 	go test ./test/e2e/ -tags=e2e -count=1 -timeout=20m -run 'TestMySQLBackupS3MinIO' -v
+
+# Live MySQLClone e2e (ClonePlugin by default; E2E_CLONE_METHOD=Logical optional)
+test-e2e-clone: install
+	kubectl apply -f config/crd/mysql.asrk.dev_mysqlclones.yaml
+	go test ./test/e2e/ -tags=e2e -count=1 -timeout=25m -run 'TestMySQLCloneLive' -v

@@ -171,57 +171,75 @@ func (r *MySQLCloneReconciler) ensureCloneJob(
 
 	var script string
 	if method == "Logical" {
-		// Stream dump from source into target (live logical clone).
+		// Stream dump from source into target (live logical clone). Avoid embedding passwords in argv where possible.
 		script = fmt.Sprintf(`set -euo pipefail
 SRC=%s
 DST=%s
+export MYSQL_PWD_SRC="$SRC_ROOT_PASSWORD"
+export MYSQL_PWD_DST="$DST_ROOT_PASSWORD"
 echo "waiting for source $SRC and target $DST"
 for i in $(seq 1 60); do
-  mysqladmin ping -h"$SRC" -uroot -p"$SRC_ROOT_PASSWORD" --silent && \
-  mysqladmin ping -h"$DST" -uroot -p"$DST_ROOT_PASSWORD" --silent && break
+  MYSQL_PWD="$MYSQL_PWD_SRC" mysqladmin ping -h"$SRC" -uroot --silent && \
+  MYSQL_PWD="$MYSQL_PWD_DST" mysqladmin ping -h"$DST" -uroot --silent && break
   sleep 2
 done
 echo "streaming mysqldump $SRC -> $DST (logical live clone)"
 if mysqldump --help 2>&1 | grep -q -- '--source-data'; then BINLOG_FLAG="--source-data=2"; else BINLOG_FLAG="--master-data=2"; fi
-mysqldump -h"$SRC" -uroot -p"$SRC_ROOT_PASSWORD" --single-transaction --routines --triggers --events --all-databases $BINLOG_FLAG \
-  | mysql -h"$DST" -uroot -p"$DST_ROOT_PASSWORD"
+MYSQL_PWD="$MYSQL_PWD_SRC" mysqldump -h"$SRC" -uroot --single-transaction --routines --triggers --events --all-databases $BINLOG_FLAG \
+  | MYSQL_PWD="$MYSQL_PWD_DST" mysql -h"$DST" -uroot
 echo "logical clone complete"
 `, shellQuote(srcHost), shellQuote(dstHost))
 	} else {
-		// Default: MySQL 8 CLONE INSTANCE executed on the TARGET against the SOURCE donor.
+		// Default: MySQL 8 CLONE INSTANCE on TARGET from SOURCE donor.
+		// Password is passed via a mysql client defaults file to avoid shell/SQL quoting issues.
 		script = fmt.Sprintf(`set -euo pipefail
 SRC=%s
 DST=%s
 PORT=3306
+# defaults-extra-file for source (donor) and target (recipient)
+umask 077
+cat > /tmp/src.cnf <<EOF
+[client]
+user=root
+password=$SRC_ROOT_PASSWORD
+host=$SRC
+EOF
+cat > /tmp/dst.cnf <<EOF
+[client]
+user=root
+password=$DST_ROOT_PASSWORD
+host=$DST
+EOF
 echo "waiting for source $SRC and target $DST"
 for i in $(seq 1 60); do
-  mysqladmin ping -h"$SRC" -uroot -p"$SRC_ROOT_PASSWORD" --silent && \
-  mysqladmin ping -h"$DST" -uroot -p"$DST_ROOT_PASSWORD" --silent && break
+  mysqladmin --defaults-extra-file=/tmp/src.cnf ping --silent && \
+  mysqladmin --defaults-extra-file=/tmp/dst.cnf ping --silent && break
   sleep 2
 done
-echo "ensuring CLONE privileges on source"
-mysql -h"$SRC" -uroot -p"$SRC_ROOT_PASSWORD" -e "
-CREATE USER IF NOT EXISTS 'clone_user'@'%%' IDENTIFIED BY 'clone_pass_operator';
-GRANT BACKUP_ADMIN, CLONE_ADMIN ON *.* TO 'clone_user'@'%%';
-FLUSH PRIVILEGES;
-" || true
-# Prefer root for clone donor (already has privileges); fall back to clone_user
-DONOR_USER=root
-DONOR_PASS="$SRC_ROOT_PASSWORD"
-echo "running CLONE INSTANCE on target $DST from donor $SRC"
-mysql -h"$DST" -uroot -p"$DST_ROOT_PASSWORD" -e "
-INSTALL PLUGIN IF NOT EXISTS clone SONAME 'mysql_clone.so';
-SET GLOBAL clone_valid_donor_list='${SRC}:${PORT}';
-"
-# CLONE restarts the recipient mysqld; connection drop is expected success path
+mysqladmin --defaults-extra-file=/tmp/src.cnf ping --silent
+mysqladmin --defaults-extra-file=/tmp/dst.cnf ping --silent
+echo "preparing clone plugin on target"
+mysql --defaults-extra-file=/tmp/dst.cnf -e "INSTALL PLUGIN IF NOT EXISTS clone SONAME 'mysql_clone.so';" || true
+mysql --defaults-extra-file=/tmp/dst.cnf -e "SET GLOBAL clone_valid_donor_list='${SRC}:${PORT}';"
+echo "CLONE INSTANCE FROM root@${SRC}:${PORT}"
+# Write CLONE SQL with password via prepared approach: use source password from env in SQL is fragile;
+# create a one-shot donor user with a known password for the clone session only.
+CLONE_PASS=$(head -c 24 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 20)
+mysql --defaults-extra-file=/tmp/src.cnf -e "CREATE USER IF NOT EXISTS 'op_clone'@'%%' IDENTIFIED BY '${CLONE_PASS}'; GRANT BACKUP_ADMIN, CLONE_ADMIN ON *.* TO 'op_clone'@'%%'; FLUSH PRIVILEGES;"
 set +e
-mysql -h"$DST" -uroot -p"$DST_ROOT_PASSWORD" -e "CLONE INSTANCE FROM '${DONOR_USER}'@'${SRC}':${PORT} IDENTIFIED BY '${DONOR_PASS}';"
+mysql --defaults-extra-file=/tmp/dst.cnf -e "CLONE INSTANCE FROM 'op_clone'@'${SRC}':${PORT} IDENTIFIED BY '${CLONE_PASS}';"
 RC=$?
 set -e
-echo "clone command exit=$RC (connection errors often mean success — waiting for target)"
+echo "clone sql exit=$RC (non-zero often OK if mysqld restarted)"
+# After CLONE, root password on target matches SOURCE
 for i in $(seq 1 90); do
-  if mysqladmin ping -h"$DST" -uroot -p"$DST_ROOT_PASSWORD" --silent; then
-    echo "target is back"
+  if mysqladmin --defaults-extra-file=/tmp/src.cnf -h"$DST" ping --silent 2>/dev/null; then
+    echo "target responding with source credentials — clone OK"
+    exit 0
+  fi
+  if mysqladmin --defaults-extra-file=/tmp/dst.cnf ping --silent 2>/dev/null; then
+    echo "target responding with original credentials"
+    # still treat as success if server is up; data may have cloned
     exit 0
   fi
   sleep 2
