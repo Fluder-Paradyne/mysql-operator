@@ -91,6 +91,7 @@ Two layers prove the operator works locally:
 | `make test` / `make test-integration` | Reconciler creates Secret, Service, StatefulSet (envtest API server) | Downloads envtest binaries once |
 | `make test-e2e` | Real MySQL: status `Running`, `mysqladmin ping`, `SELECT 1`, app DB, read/write | Existing kubeconfig + CRD (`make install`) |
 | `make test-e2e-kind` | Same as e2e, but creates/reuses a local **kind** cluster first | Docker + kind + kubectl |
+| `make test-e2e-s3` | **S3 export** via in-cluster **MinIO** (`TestMySQLBackupS3MinIO`) | kind + CRDs |
 
 ```bash
 # Fast (no cluster): controller integration via envtest
